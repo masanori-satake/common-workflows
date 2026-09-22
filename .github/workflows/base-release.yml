@@ -1,23 +1,52 @@
 name: '共通リリース処理 (Base Release)'
 
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - project_name      : リポジトリ名を自動採用（github.event.repository.name）
+#   - Node.js           : lts/*
+#   - Python            : 3.12         （空文字でPythonセットアップをスキップ）
+#   - 依存インストール  : npm ci
+#   - Playwright        : requirements.txt 経由 + chromium --with-deps（存在時のみ）
+#   - リリース対象      : releases/*.zip（存在すれば添付。無ければ従来の zip 生成）
+#
+# リリースはドラフト/リトライ等の作り込みを排し、softprops/action-gh-release の
+# 単純な1ステップ添付に統一しています。
+# =============================================================================
+
 on:
   workflow_call:
     inputs:
       project_name:
-        description: 'プロジェクト識別名（ZIPファイル名プレフィックス）'
+        description: 'プロジェクト識別名（ZIPファイル名プレフィックス。統一値: リポジトリ名）'
         required: false
         type: string
         default: ${{ github.event.repository.name }}
       build_dir:
-        description: 'ZIP化する対象ディレクトリ（例: dist, build）'
+        description: 'release_files 未指定時に ZIP 化する対象ディレクトリ'
         required: false
         type: string
         default: 'dist'
+      release_files:
+        description: 'Release へ添付するファイルグロブ（統一値: releases/*.zip）'
+        required: false
+        type: string
+        default: 'releases/*.zip'
       node_version:
-        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
         required: false
         type: string
         default: 'lts/*'
+      python_version:
+        description: '使用するPythonのバージョン（統一値: 3.12。空文字でスキップ）'
+        required: false
+        type: string
+        default: '3.12'
+      install_command:
+        description: '依存関係のインストールコマンド（統一値: npm ci）'
+        required: false
+        type: string
+        default: 'npm ci'
     outputs:
       version:
         description: '抽出されたバージョン番号 (例: 1.2.0)'
@@ -48,9 +77,34 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
 
+      - name: 'Python環境のセットアップ (Setup Python)'
+        if: ${{ inputs.python_version != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: 'pip'
+
+      - name: 'Python依存関係のインストール (Install Python Deps if requirements.txt exists)'
+        if: ${{ inputs.python_version != '' }}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt が存在しないため Python 依存関係のインストールをスキップします。"
+          fi
+
+      - name: 'Playwright(chromium)のインストール (Install Playwright if requirements.txt exists)'
+        if: ${{ inputs.python_version != '' }}
+        run: |
+          if [ -f requirements.txt ] && grep -qi 'playwright' requirements.txt; then
+            python3 -m playwright install --with-deps chromium
+          else
+            echo "requirements.txt に playwright が含まれないため Playwright のインストールをスキップします。"
+          fi
+
       - name: '依存関係のインストールとビルド (Install & Build)'
         run: |
-          npm ci
+          ${{ inputs.install_command }}
           npm run build --if-present
 
       - name: 'バージョン情報の自動抽出 (Extract Version from Manifest/Package)'
@@ -59,29 +113,46 @@ jobs:
           node -e '
             const fs = require("fs");
             let version = "";
-            if (fs.existsSync("manifest.json")) {
-              version = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
-            } else if (fs.existsSync("package.json")) {
-              version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-            } else {
-              console.error("Error: Neither manifest.json nor package.json was found.");
+            const candidates = [
+              "projects/app/manifest.json",
+              "manifest.json",
+              "package.json",
+            ];
+            let source = "";
+            for (const file of candidates) {
+              if (fs.existsSync(file)) {
+                version = JSON.parse(fs.readFileSync(file, "utf8")).version;
+                source = file;
+                break;
+              }
+            }
+            if (!source) {
+              console.error("Error: No manifest.json or package.json was found.");
               process.exit(1);
             }
             if (!version) {
-              console.error("Error: Version field is missing.");
+              console.error(`Error: Version field is missing in ${source}.`);
               process.exit(1);
             }
             const tagName = `v${version}`;
+            console.log(`Source: ${source}`);
             console.log(`Extracted Version: ${version}`);
             console.log(`Generated Tag: ${tagName}`);
-            
+
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag_name=${tagName}\n`);
           '
 
-      - name: 'リリース用アーカイブの作成 (Create Release ZIP Archive)'
+      - name: 'リリース用アーカイブの作成 (Create Release ZIP Archive if needed)'
         id: package
         run: |
+          # release_files が既存ファイルにマッチする場合は自前 zip 生成をスキップ
+          if compgen -G "${{ inputs.release_files }}" > /dev/null; then
+            echo "既存のリリースアーティファクト (${{ inputs.release_files }}) を使用します。"
+            echo "zip_name=${{ inputs.release_files }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           VERSION="${{ steps.extract_version.outputs.version }}"
           PROJECT_NAME="${{ inputs.project_name }}"
           BUILD_DIR="${{ inputs.build_dir }}"
@@ -95,19 +166,11 @@ jobs:
 
           echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
 
-      - name: 'Gitタグの自動作成と更新 (Create or Update Git Tag)'
-        run: |
-          TAG_NAME="${{ steps.extract_version.outputs.tag_name }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]"
-          git tag -f "$TAG_NAME"
-          git push origin "$TAG_NAME" --force
-
       - name: 'GitHub Releaseの作成とアセット添付 (Create GitHub Release)'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.extract_version.outputs.tag_name }}
-          name: ${{ inputs.project_name }}${{ steps.extract_version.outputs.tag_name }}
+          name: ${{ inputs.project_name }} ${{ steps.extract_version.outputs.tag_name }}
           files: ${{ steps.package.outputs.zip_name }}
           generate_release_notes: true
         env:
@@ -123,7 +186,7 @@ jobs:
           | :--- | :--- |
           | **抽出バージョン (Version)** | `${{ steps.extract_version.outputs.version }}` |
           | **生成タグ名 (Tag Name)** | `${{ steps.extract_version.outputs.tag_name }}` |
-          | **パッケージファイル (ZIP File)** | `${{ steps.package.outputs.zip_name }}` |
+          | **添付アセット (Assets)** | `${{ steps.package.outputs.zip_name }}` |
 
           ✅ リリースアセットの作成と GitHub Release への登録が完了しました。
           EOF

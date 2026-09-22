@@ -1,0 +1,10 @@
+# 依存関係 (Dependencies)
+node_modules/
+
+# Kiro のセッション作業データは無視し、steering 設定のみ追跡する
+# (Ignore Kiro session data, but keep steering config tracked)
+.kiro/*
+!.kiro/steering/
+
+# その他のエージェント作業ディレクトリ (Other agent worktrees)
+.kilo/

@@ -1,13 +1,38 @@
 name: '共通CI処理 (Base CI)'
 
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+# 呼び出し側の `with:` を極力空にできるよう、Solo エコシステム全体で共通の値を
+# 本ワークフローのデフォルトとして閉じ込めています。以下は「固定値」であり、
+# 原則として呼び出し側で上書きしません（例外は該当プロジェクトのみ）。
+#
+#   - Node.js           : lts/*        （常に最新 LTS を追従）
+#   - Python            : 3.12         （明示固定。将来は本ファイルで一括更新）
+#   - 依存インストール  : npm ci       （package-lock.json 前提・再現性重視）
+#   - Python チェック   : scripts/ci_checks.py（存在すれば実行する単一エントリ）
+#   - Playwright        : requirements.txt 経由 + chromium --with-deps
+#   - Lint / Test       : 全件実行（差分限定の最適化は行わない）
+# =============================================================================
+
 on:
   workflow_call:
     inputs:
       node_version:
-        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
         required: false
         type: string
         default: 'lts/*'
+      python_version:
+        description: '使用するPythonのバージョン（統一値: 3.12。空文字でPythonセットアップをスキップ）'
+        required: false
+        type: string
+        default: '3.12'
+      install_command:
+        description: '依存関係のインストールコマンド（統一値: npm ci）'
+        required: false
+        type: string
+        default: 'npm ci'
       run_typecheck:
         description: '型チェックを実行するか'
         required: false
@@ -33,6 +58,9 @@ jobs:
     steps:
       - name: 'コードのチェックアウト (Checkout Code)'
         uses: actions/checkout@v4
+        with:
+          # バージョン整合性チェックや版バンプ比較のため全履歴を取得する
+          fetch-depth: 0
 
       - name: 'Node.js環境のセットアップ (Setup Node.js)'
         uses: actions/setup-node@v4
@@ -40,8 +68,32 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
 
-      - name: '依存関係のインストール (Install Dependencies)'
-        run: npm ci
+      - name: 'Python環境のセットアップ (Setup Python)'
+        if: ${{ inputs.python_version != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: 'pip'
+
+      - name: 'Python依存関係のインストール (Install Python Deps if requirements.txt exists)'
+        if: ${{ inputs.python_version != '' }}
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt が存在しないため Python 依存関係のインストールをスキップします。"
+          fi
+
+      - name: 'Node.js依存関係のインストール (Install Node Dependencies)'
+        run: ${{ inputs.install_command }}
+
+      - name: 'プロジェクトポリシーチェック (Run Project Policy Checks)'
+        run: |
+          if [ -f scripts/ci_checks.py ]; then
+            python3 scripts/ci_checks.py
+          else
+            echo "scripts/ci_checks.py が存在しないため共通ポリシーチェックをスキップします。"
+          fi
 
       - name: '型チェックの実行 (Type Check)'
         if: ${{ inputs.run_typecheck }}

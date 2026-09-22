@@ -1,17 +1,55 @@
 name: '共通セキュリティスキャン (Base Security)'
 
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - Node.js           : lts/*
+#   - npm audit         : 既定で実行（--audit-level=high）
+#   - OSV-Scanner       : 既定で実行（Solo 全プロジェクトで利用）
+#                         OSV のバージョンを本ファイルで一元管理し、各リポジトリの
+#                         参照バージョンのばらつきを解消する
+#   - OSV スキャン対象  : ./projects と ./package.json（再帰）
+#
+# 注意: 旧実装の `npm audit --if-present` は npm audit に存在しないフラグのため
+#       常に失敗していた。本ファイルで削除済み。
+# =============================================================================
+
 on:
   workflow_call:
     inputs:
       node_version:
-        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
         required: false
         type: string
         default: 'lts/*'
+      run_npm_audit:
+        description: 'npm audit を実行するか（統一値: true）'
+        required: false
+        type: boolean
+        default: true
+      audit_level:
+        description: 'npm audit のしきい値（統一値: high）'
+        required: false
+        type: string
+        default: 'high'
+      enable_osv_scan:
+        description: 'OSV-Scanner を実行するか（統一値: true）'
+        required: false
+        type: boolean
+        default: true
+      osv_scan_args:
+        description: 'OSV-Scanner のスキャン引数（統一値: ./projects と ./package.json を再帰）'
+        required: false
+        type: string
+        default: |-
+          --recursive
+          ./projects
+          ./package.json
 
 jobs:
   audit:
     name: '依存関係脆弱性診断 (NPM Audit)'
+    if: ${{ inputs.run_npm_audit }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -26,4 +64,16 @@ jobs:
           cache: 'npm'
 
       - name: '脆弱性チェックの実行 (Audit Dependencies)'
-        run: npm audit --audit-level=high --if-present
+        run: npm audit --audit-level=${{ inputs.audit_level }}
+
+  osv-scan:
+    name: 'OSV-Scanner による脆弱性検査 (Vulnerability Scan)'
+    if: ${{ inputs.enable_osv_scan }}
+    permissions:
+      actions: read
+      security-events: write
+      contents: read
+    # OSV バージョンをエコシステム全体で一元管理する
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.1
+    with:
+      scan-args: ${{ inputs.osv_scan_args }}

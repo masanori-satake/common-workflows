@@ -1,0 +1,58 @@
+name: '共通バージョン更新確認 (Base Version Bump Check)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - 判定対象マニフェスト: projects/app/manifest.json
+#   - 監視パス            : projects/app/**
+#   - 実装                : jq ベース1系統に統一（旧: Python インライン / jq 混在）
+#
+# projects/app 配下に変更がある PR で、manifest.json の version が base ブランチ
+# から更新されているかを検証する。更新されていなければ CI を失敗させる。
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      manifest_path:
+        description: 'バージョン判定に用いるマニフェスト（統一値: projects/app/manifest.json）'
+        required: false
+        type: string
+        default: 'projects/app/manifest.json'
+
+permissions:
+  contents: read
+
+jobs:
+  version-bump-check:
+    name: 'バージョン更新の有無を確認 (Check Version Bump)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'バージョン更新の比較 (Compare Base vs Head Version)'
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # base ブランチ側のバージョンを取得（存在しない場合は空）
+          BASE_VERSION="$(git show "origin/${BASE_REF}:${MANIFEST_PATH}" 2>/dev/null | jq -r '.version' || echo "")"
+          # PR(head)側のバージョンを取得
+          HEAD_VERSION="$(jq -r '.version' "${MANIFEST_PATH}")"
+
+          echo "Base version: ${BASE_VERSION:-<none>}"
+          echo "Head version: ${HEAD_VERSION}"
+
+          if [ -n "${BASE_VERSION}" ] && [ "${BASE_VERSION}" = "${HEAD_VERSION}" ]; then
+            echo "::error file=${MANIFEST_PATH}::projects/app/ を変更する際は ${MANIFEST_PATH} の version を更新してください。 (Version must be bumped)"
+            exit 1
+          fi
+
+          echo "バージョン更新を確認しました。 (Version bump detected)"

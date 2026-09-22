@@ -1,0 +1,55 @@
+name: '共通Pagesデプロイ (Base Deploy Pages)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - 公開ディレクトリ  : projects/web（Solo 全プロジェクト共通）
+#   - actions バージョン: configure-pages@v5 / upload-pages-artifact@v3 /
+#                         deploy-pages@v4 に統一
+#
+# 6 リポジトリでほぼ同一だった GitHub Pages デプロイを本ワークフローへ集約し、
+# actions のバージョン差（v4/v5 の混在）を解消する。
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      publish_dir:
+        description: '公開する成果物ディレクトリ（統一値: projects/web）'
+        required: false
+        type: string
+        default: 'projects/web'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 'GitHub Pagesへデプロイ (Deploy to GitHub Pages)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+
+      - name: 'GitHub Pages 設定 (Setup Pages)'
+        uses: actions/configure-pages@v5
+
+      - name: '成果物のアップロード (Upload Pages Artifact)'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.publish_dir }}
+
+      - name: 'GitHub Pages へのデプロイ (Deploy to GitHub Pages)'
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -147,3 +147,127 @@ concurrency:
 > 3. すべてのワークフロー名・ステップ名に '日本語 (English)' の二言語併記ルールを適用してください。
 > 4. 各 Job に `timeout-minutes`（例: 10分）、最小限の `permissions`、および `concurrency` を設定してください。
 > 5. 複雑なインラインスクリプトは `scripts/` ディレクトリに外部ファイル化し、`$GITHUB_STEP_SUMMARY` に結果を出力させてください。」
+
+---
+
+## 11. 統一パラメータと共通ワークフロー (Unified Parameters & Reusable Workflows)
+
+プロジェクトごとにばらついていたパラメータを `common-workflows` 内のデフォルト値へ**閉じ込め**、呼び出し側の `with:` を極力空にすることで、各プロジェクトのメンテナンスコストを最小化します。
+
+### 11.1 統一パラメータ一覧 (Unified Parameters)
+
+以下は Solo エコシステム全体の**固定値**です。値の変更が必要な場合は、原則として各プロジェクトではなく `common-workflows` の base ワークフロー側で一括更新します。
+
+| 項目 (Item) | 統一値 (Unified Value) | 定義元 (Defined In) |
+| :--- | :--- | :--- |
+| Node.js バージョン | `lts/*`（常に最新 LTS を追従） | `base-ci` / `base-release` / `base-security` |
+| Python バージョン | `3.12`（明示固定） | `base-ci` / `base-release` |
+| 依存インストール | `npm ci`（`package-lock.json` 前提） | `base-ci` / `base-release` |
+| Playwright | `requirements.txt` 経由 + `chromium --with-deps`（存在時のみ） | `base-ci` / `base-release` |
+| Python チェック入口 | `scripts/ci_checks.py`（存在すれば実行する単一エントリ） | `base-ci` |
+| Lint / Test | 全件実行（差分限定の最適化は行わない） | `base-ci` |
+| npm audit | 実行（`--audit-level=high`） | `base-security` |
+| OSV-Scanner | 実行（バージョンを一元管理） | `base-security` |
+| リリース対象 | `releases/*.zip`（無ければ従来の zip 生成） | `base-release` |
+| `project_name` | リポジトリ名を自動採用（`github.event.repository.name`） | `base-release` |
+| Pages 公開ディレクトリ | `projects/web` | `base-deploy-pages` |
+| 版バンプ判定 | `projects/app/manifest.json` を jq で比較 | `base-version-bump` |
+
+> **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` は共通化せず廃止します。** 恒久的なフラグ化は避け、`common-workflows` 側で actions のバージョンを新しく保つ運用で対応します。
+
+### 11.2 CI ポリシーチェックの単一エントリ (`scripts/ci_checks.py`)
+
+各プロジェクトが個別に持っていた Python ポリシースクリプト群（`check_root_files.py` / `verify_project_policies.py` / `check_version.py` / `verify_version_impact.py` / `audit_production_dependencies.py` 等）は、`scripts/ci_checks.py` という**単一エントリ**にまとめ、その中から順に呼び出します。`base-ci` はこのファイルが存在すれば自動実行するため、呼び出し側での指定は不要です。
+
+### 11.3 呼び出し側テンプレート (Caller Templates)
+
+統一パラメータが base 側に閉じ込められているため、各プロジェクトの呼び出しワークフローは以下のように**ほぼ `with:` 不要**になります。
+
+```yaml
+# .github/workflows/code-quality.yml
+name: 'コード品質検証 (Code Quality)'
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    name: '共通品質チェック実行 (Execute Base CI)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-ci.yml@v1
+    # with: は原則不要（統一パラメータが base 側に閉じ込められている）
+```
+
+```yaml
+# .github/workflows/security-scan.yml
+name: 'セキュリティスキャン (Security Scan)'
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  security:
+    name: '共通セキュリティスキャン実行 (Execute Base Security)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-security.yml@v1
+```
+
+```yaml
+# .github/workflows/release-package.yml
+name: 'リリースパッケージ公開 (Release Package)'
+on:
+  push:
+    tags: ['v*.*.*']
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  release:
+    name: '共通リリース処理実行 (Execute Base Release)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
+```
+
+```yaml
+# .github/workflows/deploy-pages.yml
+name: 'Pagesデプロイ (Deploy Pages)'
+on:
+  push:
+    branches: [main]
+    paths: ['projects/web/**']
+  workflow_dispatch:
+jobs:
+  deploy:
+    name: '共通Pagesデプロイ実行 (Execute Base Deploy Pages)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-deploy-pages.yml@v1
+```
+
+```yaml
+# .github/workflows/version-bump.yml
+name: 'バージョン更新確認 (Version Bump Check)'
+on:
+  pull_request:
+    branches: [main]
+    paths: ['projects/app/**']   # パスフィルタは呼び出し側で指定する
+jobs:
+  version-bump:
+    name: '共通バージョン確認実行 (Execute Base Version Bump)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-version-bump.yml@v1
+```
+
+### 11.4 例外的に `with:` を指定するケース (When to Override)
+
+統一値で賄えない**明確な必然性**がある場合のみ、呼び出し側で上書きします。例:
+
+- TypeScript を使わない Vanilla JS プロジェクトで型チェックを止めたい: `run_typecheck: false`
+- `npm audit` が不要なプロジェクト: `run_npm_audit: false`
+- OSV のスキャン対象を変更したい: `osv_scan_args: ...`
+
+それ以外のパラメータ（Node/Python バージョン、インストールコマンド等）は**呼び出し側で上書きしない**のが原則です。
