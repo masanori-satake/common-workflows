@@ -1,0 +1,13 @@
+{
+  "name": "my-chrome-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"Implement dev build script\"",
+    "build": "echo \"Implement production build script\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo \"No linter configured yet\"",
+    "test": "echo \"No test configured yet\""
+  }
+}

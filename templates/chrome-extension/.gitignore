@@ -1,0 +1,19 @@
+# dependencies
+/node_modules
+
+# build outputs
+/dist
+/build
+*.zip
+
+# logs & OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE & local env
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+.env
+.env.local
