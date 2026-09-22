@@ -1,0 +1,18 @@
+name: 'カバレッジ (Coverage)'
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    name: '共通カバレッジ計測実行 (Execute Base Coverage)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-coverage.yml@v1
+    # package.json に coverage スクリプト（json-summary 出力）が無ければ自動スキップ。
+    # 将来カバレッジ下限を強制する場合のみ:
+    # with:
+    #   min_coverage: '80'

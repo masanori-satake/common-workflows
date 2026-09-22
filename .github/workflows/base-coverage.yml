@@ -1,0 +1,92 @@
+name: '共通カバレッジ計測 (Base Coverage)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - Node.js         : lts/*
+#   - 依存インストール: lockfile 自動判定（あり→npm ci / なし→npm install）
+#   - 計測コマンド    : npm run coverage（存在すれば実行。json-summary 前提）
+#   - 出力            : coverage/coverage-summary.json を集計し PR に sticky コメント
+#   - 閾値            : min_coverage（既定 0 = 強制しない。将来引き上げ用）
+#
+# jest / vitest いずれも json-summary レポーターで同形式の
+# coverage/coverage-summary.json を出力できるため、ランナー非依存で集計する。
+# 第三者 Action には依存しない。
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      min_coverage:
+        description: '行カバレッジの下限(%)。0 なら閾値チェックをしない（統一値: 0）'
+        required: false
+        type: string
+        default: '0'
+      coverage_file:
+        description: 'カバレッジサマリ JSON のパス'
+        required: false
+        type: string
+        default: 'coverage/coverage-summary.json'
+
+jobs:
+  coverage:
+    name: 'カバレッジ計測とPRコメント (Measure Coverage & Comment)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+
+      - name: 'lockfile の有無を判定 (Detect Lockfile)'
+        id: lockfile
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js, with cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'true' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js, no cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'false' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: '依存関係のインストール (Install Dependencies)'
+        env:
+          LOCKFILE_EXISTS: ${{ steps.lockfile.outputs.exists }}
+        run: |
+          if [ "$LOCKFILE_EXISTS" = "true" ]; then
+            npm ci
+          else
+            echo "package-lock.json が存在しないため npm install を使用します。"
+            npm install
+          fi
+
+      - name: 'カバレッジ計測の実行 (Run Coverage)'
+        run: npm run coverage --if-present
+
+      - name: 'カバレッジPRコメントの投稿 (Post Coverage Comment)'
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: masanori-satake/common-workflows/.github/actions/coverage-comment@v1
+        with:
+          coverage_file: ${{ inputs.coverage_file }}
+          min_coverage: ${{ inputs.min_coverage }}
+          pr_number: ${{ github.event.pull_request.number }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}

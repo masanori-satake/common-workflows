@@ -1,0 +1,41 @@
+name: 'カバレッジPRコメント (Coverage PR Comment)'
+description: 'coverage/coverage-summary.json を集計し、PR に sticky コメントとして投稿する共通 composite action。jest/vitest 非依存。'
+
+inputs:
+  coverage_file:
+    description: 'カバレッジサマリ JSON のパス'
+    required: false
+    default: 'coverage/coverage-summary.json'
+  min_coverage:
+    description: '行カバレッジの下限(%)。0 なら閾値チェックをしない'
+    required: false
+    default: '0'
+  pr_number:
+    description: 'コメント対象の PR 番号（空ならコメント投稿をスキップ）'
+    required: false
+    default: ''
+  python_version:
+    description: '使用する Python のバージョン'
+    required: false
+    default: '3.12'
+  github_token:
+    description: 'gh 認証用トークン'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Python環境のセットアップ (Setup Python)'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: 'カバレッジコメントの投稿 (Post Coverage Comment)'
+      shell: bash
+      env:
+        COVERAGE_FILE: ${{ inputs.coverage_file }}
+        MIN_COVERAGE: ${{ inputs.min_coverage }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        python3 "${{ github.action_path }}/coverage_comment.py"

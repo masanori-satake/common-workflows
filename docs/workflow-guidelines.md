@@ -314,3 +314,68 @@ jobs:
 
 これにより「共通化はできないが、ゼロから書き起こす必要もない」状態を作り、
 プロジェクトごとの実装のユニーク性を最小化する。
+
+---
+
+## 13. カバレッジ計測と PR コメント (Coverage & PR Comment)
+
+テストカバレッジをエコシステム全体で統一的に可視化し、将来的に一定水準まで
+引き上げていくため、カバレッジ計測と PR への sticky コメント投稿を共通化する。
+
+### 13.1 共通ワークフロー: base-coverage.yml
+
+- 場所: `masanori-satake/common-workflows/.github/workflows/base-coverage.yml@v1`
+- 動作:
+  1. `npm run coverage`（存在すれば実行。無ければスキップ）
+  2. `coverage/coverage-summary.json` を集計
+  3. `pull_request` 時に PR へ sticky コメントを投稿（既存コメントは更新）
+- inputs（すべて任意・既定あり）:
+  - `node_version`（既定 `lts/*`）
+  - `min_coverage`（既定 `0` = 強制しない。将来引き上げ時に `> 0` を指定すると
+    行カバレッジが下限未満で CI を失敗させる）
+  - `coverage_file`（既定 `coverage/coverage-summary.json`）
+- 第三者 Action 非依存。集計は共通 composite action `coverage-comment` が担当し、
+  `gh` で PR コメントを作成/更新する。
+
+### 13.2 統一スクリプト規約: `npm run coverage`
+
+各プロジェクトは `package.json` に `coverage` スクリプトを用意し、**json-summary**
+レポーターで `coverage/coverage-summary.json` を出力する。jest / vitest いずれも
+同一形式で出力できるため、共通ワークフローはランナー非依存で集計できる。
+
+```jsonc
+// jest プロジェクト
+{ "scripts": { "coverage": "jest --coverage --coverageReporters=json-summary text" } }
+
+// vitest プロジェクト
+{ "scripts": { "coverage": "vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text" } }
+```
+
+カバレッジ非対応のプロジェクト（Playwright E2E 主体など）は `coverage` スクリプトを
+定義しないことで、ワークフローが自動的にスキップする。
+
+### 13.3 呼び出し側テンプレート
+
+```yaml
+# .github/workflows/coverage.yml
+name: 'カバレッジ (Coverage)'
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  coverage:
+    name: '共通カバレッジ計測実行 (Execute Base Coverage)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-coverage.yml@v1
+    # 将来カバレッジ下限を強制する場合のみ:
+    # with:
+    #   min_coverage: '80'
+```
+
+### 13.4 廃止した従来手法
+
+カバレッジの README バッジ自動コミットや、カバレッジ HTML レポートの GitHub Pages
+公開は行わない。PR コメントによる可視化に一本化する（バッジ自動コミットはブランチ
+保護や履歴汚染の観点でも扱いにくいため）。
