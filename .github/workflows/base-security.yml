@@ -1,0 +1,29 @@
+name: '共通セキュリティスキャン (Base Security)'
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
+        required: false
+        type: string
+        default: 'lts/*'
+
+jobs:
+  audit:
+    name: '依存関係脆弱性診断 (NPM Audit)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: '脆弱性チェックの実行 (Audit Dependencies)'
+        run: npm audit --audit-level=high --if-present

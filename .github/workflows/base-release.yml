@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: 'dist'
+      node_version:
+        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
+        required: false
+        type: string
+        default: 'lts/*'
     outputs:
       version:
         description: '抽出されたバージョン番号 (例: 1.2.0)'
@@ -40,7 +45,7 @@ jobs:
       - name: 'Node.js環境のセットアップ (Setup Node.js)'
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ inputs.node_version }}
           cache: 'npm'
 
       - name: '依存関係のインストールとビルド (Install & Build)'
@@ -94,7 +99,7 @@ jobs:
         run: |
           TAG_NAME="${{ steps.extract_version.outputs.tag_name }}"
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]"
           git tag -f "$TAG_NAME"
           git push origin "$TAG_NAME" --force
 
@@ -112,7 +117,7 @@ jobs:
         if: always()
         run: |
           cat << 'EOF' >> $GITHUB_STEP_SUMMARY
-          ### 📦 リリリースパッケージ作成結果 (Release Package Summary)
+          ### 📦 リリースパッケージ作成結果 (Release Package Summary)
 
           | 項目 (Item) | 設定値 (Value) |
           | :--- | :--- |

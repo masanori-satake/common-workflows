@@ -2,8 +2,7 @@ name: 'リリースパッケージ作成 (Release Package)'
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
     paths:
       - 'manifest.json'
       - 'package.json'
@@ -15,10 +14,10 @@ concurrency:
 
 jobs:
   release:
-    name: '共通リリース処理の呼び出し (Invoke Base Release)'
     uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
     permissions:
       contents: write
-    with:
-      project_name: 'my-chrome-extension'
-      build_dir: 'dist'
+    # 必要に応じてパラメータをオーバーライド可能です（未指定時はデフォルト値が使用されます）
+    # with:
+    #   project_name: 'my-chrome-extension' # デフォルト: リポジトリ名 (github.event.repository.name)
+    #   build_dir: 'dist'                   # デフォルト: 'dist'

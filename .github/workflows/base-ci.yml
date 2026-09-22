@@ -1,35 +1,59 @@
-name: Base CI
+name: '共通CI処理 (Base CI)'
 
 on:
   workflow_call:
     inputs:
-      node-version:
-        description: 'Node.js version'
+      node_version:
+        description: '使用するNode.jsのバージョン (デフォルト: lts/*)'
         required: false
         type: string
-        default: '22'
+        default: 'lts/*'
+      run_typecheck:
+        description: '型チェックを実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_lint:
+        description: '静的解析(Lint)を実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_test:
+        description: '単体テストを実行するか'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
-  quality-check:
+  ci:
+    name: '品質検証・ビルド (Validate & Build)'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - name: Checkout code
+      - name: 'コードのチェックアウト (Checkout Code)'
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node-version }}
+          node-version: ${{ inputs.node_version }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: '依存関係のインストール (Install Dependencies)'
         run: npm ci
 
-      - name: Type check
+      - name: '型チェックの実行 (Type Check)'
+        if: ${{ inputs.run_typecheck }}
         run: npm run typecheck --if-present
 
-      - name: Lint
+      - name: '静的解析の実行 (Lint)'
+        if: ${{ inputs.run_lint }}
         run: npm run lint --if-present
 
-      - name: Test
-        run: npm test --if-present
+      - name: '単体テストの実行 (Test)'
+        if: ${{ inputs.run_test }}
+        run: npm run test --if-present
+
+      - name: 'ビルドの実行 (Build)'
+        run: npm run build --if-present
