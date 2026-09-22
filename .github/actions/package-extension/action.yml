@@ -1,0 +1,41 @@
+name: '拡張機能パッケージング (Package Extension)'
+description: '素材ディレクトリを統一命名の ZIP にまとめる共通 composite action。リリース ZIP 名をエコシステム全体で {リポジトリ名}-v{version}.zip に統一する。'
+
+inputs:
+  source_dir:
+    description: 'ZIP に含める素材ディレクトリ'
+    required: false
+    default: 'projects/app'
+  zip_name:
+    description: '出力 ZIP のファイル名'
+    required: true
+  manifest_rename:
+    description: 'ZIP 内リネーム "元:新"（例: manifest.chrome.json:manifest.json）。空なら無し'
+    required: false
+    default: ''
+  python_version:
+    description: '使用する Python のバージョン'
+    required: false
+    default: '3.12'
+
+outputs:
+  zip_name:
+    description: '生成された ZIP のファイル名'
+    value: ${{ inputs.zip_name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Python環境のセットアップ (Setup Python)'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: 'ZIP の生成 (Create ZIP)'
+      shell: bash
+      env:
+        SOURCE_DIR: ${{ inputs.source_dir }}
+        ZIP_NAME: ${{ inputs.zip_name }}
+        MANIFEST_RENAME: ${{ inputs.manifest_rename }}
+      run: |
+        python3 "${{ github.action_path }}/package_extension.py"

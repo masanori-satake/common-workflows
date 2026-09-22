@@ -8,7 +8,8 @@ name: '共通リリース処理 (Base Release)'
 #   - Python            : 3.12         （空文字でPythonセットアップをスキップ）
 #   - 依存インストール  : npm ci
 #   - Playwright        : requirements.txt 経由 + chromium --with-deps（存在時のみ）
-#   - リリース対象      : releases/*.zip（存在すれば添付。無ければ従来の zip 生成）
+#   - リリース ZIP 名   : package_source_dir 指定時は {project_name}-v{version}.zip に統一（方式A）
+#                         未指定時は従来の release_files（既定 releases/*.zip）を使用
 #   - アイコン生成      : generate_icons: true で generate-icons action を使用（任意）
 #
 # リリースはドラフト/リトライ等の作り込みを排し、softprops/action-gh-release の
@@ -50,6 +51,21 @@ on:
             - package-lock.json あり → npm ci（再現性重視）
             - package-lock.json なし → npm install（lockfile 不要な依存ゼロ構成向け）
           明示指定した場合はその値をそのまま使用する。
+        required: false
+        type: string
+        default: ''
+      package_source_dir:
+        description: |
+          リリース ZIP に含める素材ディレクトリ。指定時は base-release 側で
+          {project_name}-v{version}.zip を生成する（ZIP 名の統一）。
+          空の場合は従来通り release_files（既定 releases/*.zip）を使用する。
+        required: false
+        type: string
+        default: ''
+      manifest_rename:
+        description: |
+          ZIP 内でのファイルリネーム（package_source_dir 指定時のみ有効）。
+          形式 "元ファイル名:新ファイル名"（例: manifest.chrome.json:manifest.json）。空なら無し。
         required: false
         type: string
         default: ''
@@ -218,28 +234,52 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag_name=${tagName}\n`);
           '
 
-      - name: 'リリース用アーカイブの作成 (Create Release ZIP Archive if needed)'
-        id: package
+      # 方式A: package_source_dir 指定時は共通 action で ZIP 名を統一生成する
+      - name: 'リリース用アーカイブの作成 (Create Release ZIP - unified naming)'
+        id: package_unified
+        if: ${{ inputs.package_source_dir != '' }}
+        uses: masanori-satake/common-workflows/.github/actions/package-extension@v1
+        with:
+          source_dir: ${{ inputs.package_source_dir }}
+          zip_name: ${{ inputs.project_name }}-v${{ steps.extract_version.outputs.version }}.zip
+          manifest_rename: ${{ inputs.manifest_rename }}
+
+      - name: 'リリース用アーカイブの作成 (Create Release ZIP - legacy/fallback)'
+        id: package_legacy
+        if: ${{ inputs.package_source_dir == '' }}
+        env:
+          VERSION: ${{ steps.extract_version.outputs.version }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+          RELEASE_FILES: ${{ inputs.release_files }}
         run: |
-          # release_files が既存ファイルにマッチする場合は自前 zip 生成をスキップ
-          if compgen -G "${{ inputs.release_files }}" > /dev/null; then
-            echo "既存のリリースアーティファクト (${{ inputs.release_files }}) を使用します。"
-            echo "zip_name=${{ inputs.release_files }}" >> $GITHUB_OUTPUT
+          # 従来方式: release_files が既存ファイルにマッチすればそれを使用
+          if compgen -G "$RELEASE_FILES" > /dev/null; then
+            echo "既存のリリースアーティファクト (${RELEASE_FILES}) を使用します。"
+            echo "zip_name=${RELEASE_FILES}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          VERSION="${{ steps.extract_version.outputs.version }}"
-          PROJECT_NAME="${{ inputs.project_name }}"
-          BUILD_DIR="${{ inputs.build_dir }}"
+          # フォールバック: build_dir があればその中身を、無ければリポジトリ全体を ZIP 化
           ZIP_NAME="${PROJECT_NAME}-v${VERSION}.zip"
-
           if [ -d "$BUILD_DIR" ]; then
             cd "$BUILD_DIR" && zip -r "../$ZIP_NAME" ./* && cd ..
           else
             zip -r "$ZIP_NAME" . -x "*.git*" "node_modules/*" ".github/*"
           fi
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
 
-          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+      - name: 'アセットファイル名の確定 (Resolve Asset File Name)'
+        id: package
+        env:
+          UNIFIED: ${{ steps.package_unified.outputs.zip_name }}
+          LEGACY: ${{ steps.package_legacy.outputs.zip_name }}
+        run: |
+          if [ -n "$UNIFIED" ]; then
+            echo "zip_name=${UNIFIED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "zip_name=${LEGACY}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 'GitHub Releaseの作成とアセット添付 (Create GitHub Release)'
         uses: softprops/action-gh-release@v2

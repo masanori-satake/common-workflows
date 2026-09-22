@@ -379,3 +379,46 @@ jobs:
 カバレッジの README バッジ自動コミットや、カバレッジ HTML レポートの GitHub Pages
 公開は行わない。PR コメントによる可視化に一本化する（バッジ自動コミットはブランチ
 保護や履歴汚染の観点でも扱いにくいため）。
+
+---
+
+## 14. リリース ZIP 名の統一 (Unified Release ZIP Naming)
+
+Release に添付する拡張機能パッケージ（ZIP）のファイル名を、エコシステム全体で
+**`{リポジトリ名}-v{version}.zip`**（例: `OmniView-Solo-v1.1.6.zip`）に統一する。
+
+従来は各プロジェクトの build スクリプトが `package.json` の `name`（小文字。例
+`actionsboard-solo`）を使って命名しており、`actionsboard-solo-v1.1.4.zip` のように
+バラついていた。これを解消するため、ZIP 生成と命名を base-release 側に集約する（方式A）。
+
+### 14.1 使い方
+
+`base-release.yml` に `package_source_dir` を指定すると、base-release が共通 action
+`package-extension` を使って ZIP を統一命名で生成する。ZIP 名は
+`{project_name}-v{version}.zip`（`project_name` の既定はリポジトリ名）。
+
+```yaml
+jobs:
+  release:
+    uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
+    permissions:
+      contents: write
+    with:
+      package_source_dir: 'projects/app'
+      # manifest.chrome.json を同梱時に manifest.json へリネームする場合のみ:
+      # manifest_rename: 'manifest.chrome.json:manifest.json'
+      # SVG からアイコンを生成する場合:
+      # generate_icons: true
+```
+
+- `package_source_dir` 指定時、各プロジェクトの `build` スクリプトは **ZIP を作らない**。
+  素材（`projects/app`）を用意する（必要ならアイコン生成・バージョン検証を行う）だけでよい。
+- 除外ルール（`node_modules` / `test-results` / `_metadata` / ドット始まり / `thumbs.db` 等、
+  ただし `_locales` は保持）は共通 action 側に集約済み。
+- `manifest_rename` で ZIP 内リネーム（例 `manifest.chrome.json → manifest.json`）に対応。
+
+### 14.2 移行の指針
+
+各プロジェクトは build スクリプトから ZIP 生成ロジックを取り除き、`package_source_dir` を
+指定する形へ移行する。これにより ZIP 名がリポジトリ名ベースに統一され、`package.json` の
+`name`（小文字慣例）に依存しなくなる。
