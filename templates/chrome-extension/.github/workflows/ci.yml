@@ -1,0 +1,12 @@
+# templates/chrome-extension/.github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  ci:
+    # node-version を指定しないことで、base-ci.yml の default バージョンが自動適用されます
+    uses: masanori-satake/common-workflows/.github/workflows/base-ci.yml@v1
