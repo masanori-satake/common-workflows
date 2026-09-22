@@ -29,10 +29,15 @@ on:
         type: string
         default: '3.12'
       install_command:
-        description: '依存関係のインストールコマンド（統一値: npm ci）'
+        description: |
+          依存関係のインストールコマンド。
+          空文字（統一値）の場合は lockfile の有無で自動判定する:
+            - package-lock.json あり → npm ci（再現性重視）
+            - package-lock.json なし → npm install（lockfile 不要な依存ゼロ構成向け）
+          明示指定した場合はその値をそのまま使用する。
         required: false
         type: string
-        default: 'npm ci'
+        default: ''
       run_typecheck:
         description: '型チェックを実行するか'
         required: false
@@ -62,11 +67,28 @@ jobs:
           # バージョン整合性チェックや版バンプ比較のため全履歴を取得する
           fetch-depth: 0
 
-      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+      - name: 'lockfile の有無を判定 (Detect Lockfile)'
+        id: lockfile
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # lockfile がある場合のみ npm キャッシュを有効化する（setup-node の npm キャッシュは lockfile 必須のため）
+      - name: 'Node.js環境のセットアップ (Setup Node.js, with cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'true' }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
           cache: 'npm'
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js, no cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'false' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
 
       - name: 'Python環境のセットアップ (Setup Python)'
         if: ${{ inputs.python_version != '' }}
@@ -85,7 +107,16 @@ jobs:
           fi
 
       - name: 'Node.js依存関係のインストール (Install Node Dependencies)'
-        run: ${{ inputs.install_command }}
+        run: |
+          if [ -n "${{ inputs.install_command }}" ]; then
+            # 明示指定されたコマンドを優先する
+            ${{ inputs.install_command }}
+          elif [ "${{ steps.lockfile.outputs.exists }}" = "true" ]; then
+            npm ci
+          else
+            echo "package-lock.json が存在しないため npm install を使用します。"
+            npm install
+          fi
 
       - name: 'プロジェクトポリシーチェック (Run Project Policy Checks)'
         run: |

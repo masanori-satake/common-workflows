@@ -162,7 +162,7 @@ concurrency:
 | :--- | :--- | :--- |
 | Node.js バージョン | `lts/*`（常に最新 LTS を追従） | `base-ci` / `base-release` / `base-security` |
 | Python バージョン | `3.12`（明示固定） | `base-ci` / `base-release` |
-| 依存インストール | `npm ci`（`package-lock.json` 前提） | `base-ci` / `base-release` |
+| 依存インストール | lockfile 自動判定（`package-lock.json` あり→`npm ci` / なし→`npm install`） | `base-ci` / `base-release` |
 | Playwright | `requirements.txt` 経由 + `chromium --with-deps`（存在時のみ） | `base-ci` / `base-release` |
 | Python チェック入口 | `scripts/ci_checks.py`（存在すれば実行する単一エントリ） | `base-ci` |
 | Lint / Test | 全件実行（差分限定の最適化は行わない） | `base-ci` |
