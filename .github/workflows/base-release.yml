@@ -9,6 +9,7 @@ name: '共通リリース処理 (Base Release)'
 #   - 依存インストール  : npm ci
 #   - Playwright        : requirements.txt 経由 + chromium --with-deps（存在時のみ）
 #   - リリース対象      : releases/*.zip（存在すれば添付。無ければ従来の zip 生成）
+#   - アイコン生成      : generate_icons: true で generate-icons action を使用（任意）
 #
 # リリースはドラフト/リトライ等の作り込みを排し、softprops/action-gh-release の
 # 単純な1ステップ添付に統一しています。
@@ -52,6 +53,21 @@ on:
         required: false
         type: string
         default: ''
+      generate_icons:
+        description: 'ビルド前に SVG から PNG アイコンを生成するか（generate-icons composite action を使用）'
+        required: false
+        type: boolean
+        default: false
+      icon_svg_path:
+        description: 'アイコン生成の入力 SVG パス'
+        required: false
+        type: string
+        default: 'projects/app/assets/icon.svg'
+      icon_output_dir:
+        description: 'アイコン生成の出力ディレクトリ'
+        required: false
+        type: string
+        default: 'projects/app/icons'
     outputs:
       version:
         description: '抽出されたバージョン番号 (例: 1.2.0)'
@@ -123,6 +139,14 @@ jobs:
           else
             echo "requirements.txt に playwright が含まれないため Playwright のインストールをスキップします。"
           fi
+
+      - name: 'アイコン生成 (Generate PNG Icons)'
+        if: ${{ inputs.generate_icons }}
+        uses: masanori-satake/common-workflows/.github/actions/generate-icons@v1
+        with:
+          svg_path: ${{ inputs.icon_svg_path }}
+          output_dir: ${{ inputs.icon_output_dir }}
+          python_version: ${{ inputs.python_version != '' && inputs.python_version || '3.12' }}
 
       - name: '依存関係のインストールとビルド (Install & Build)'
         run: |

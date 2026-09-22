@@ -271,3 +271,46 @@ jobs:
 - OSV のスキャン対象を変更したい: `osv_scan_args: ...`
 
 それ以外のパラメータ（Node/Python バージョン、インストールコマンド等）は**呼び出し側で上書きしない**のが原則です。
+
+---
+
+## 12. 共通スクリプトとテンプレート (Shared Scripts & Templates)
+
+プロジェクト間で重複しがちな処理を、以下の2段階で「独自実装の削減」を図る。
+
+### 12.1 共通 composite action: アイコン生成 (generate-icons)
+
+SVG から PNG アイコンを生成する処理は、全プロジェクトでほぼ同一だったため
+**共通 composite action** に集約した。各プロジェクトは `generate_png_icons.py`
+を自前で持つ必要がなくなる。
+
+- 場所: `masanori-satake/common-workflows/.github/actions/generate-icons@v1`
+- 呼び出し: `base-release.yml` の `generate_icons: true` で自動的に使用される。
+- 入力（すべて任意・既定あり）: `svg_path` / `output_dir` / `file_prefix` / `sizes` /
+  `bg_color`（ブランド色差し替え）/ `python_version` / `playwright_version`
+- action 内で Python・Playwright(chromium) のセットアップまで完結する。
+
+```yaml
+# 呼び出し側 release-package.yml の例
+jobs:
+  release:
+    uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
+    permissions:
+      contents: write
+    with:
+      generate_icons: true
+```
+
+### 12.2 スクリプトのテンプレート (check_version / create_package / ci_checks)
+
+`check_version.py` と `create_package.py` は各プロジェクトの実ファイル構成に
+強く依存するため**共通化はしない**。代わりに `templates/chrome-extension/scripts/`
+に「設定駆動で拡張しやすい雛形」と解説（`scripts/README.md`）を配置し、
+新規プロジェクトがコピーして最小限の編集で使えるようにした。
+
+- `ci_checks.py` — CI ポリシーチェックの単一エントリ（`base-ci.yml` が自動実行）
+- `check_version.py` — `VERSION_SOURCES` にファイルを列挙するだけの整合性チェック
+- `create_package.py` — `SOURCE_DIR`/`EXCLUDE_*`/`RENAME_MAP` を編集する ZIP 生成
+
+これにより「共通化はできないが、ゼロから書き起こす必要もない」状態を作り、
+プロジェクトごとの実装のユニーク性を最小化する。

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "echo \"Implement dev build script\"",
-    "build": "echo \"Implement production build script\"",
+    "build": "python3 scripts/check_version.py && python3 scripts/create_package.py",
     "typecheck": "tsc --noEmit",
     "lint": "echo \"No linter configured yet\"",
     "test": "echo \"No test configured yet\""
