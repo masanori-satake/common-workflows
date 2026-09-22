@@ -125,11 +125,14 @@ jobs:
           fi
 
       - name: 'Node.js依存関係のインストール (Install Node Dependencies)'
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+          LOCKFILE_EXISTS: ${{ steps.lockfile.outputs.exists }}
         run: |
-          if [ -n "${{ inputs.install_command }}" ]; then
-            # 明示指定されたコマンドを優先する
-            ${{ inputs.install_command }}
-          elif [ "${{ steps.lockfile.outputs.exists }}" = "true" ]; then
+          if [ -n "$INSTALL_COMMAND" ]; then
+            echo "明示指定されたコマンドを実行します: $INSTALL_COMMAND"
+            eval "$INSTALL_COMMAND"
+          elif [ "$LOCKFILE_EXISTS" = "true" ]; then
             npm ci
           else
             echo "package-lock.json が存在しないため npm install を使用します。"
