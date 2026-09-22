@@ -90,12 +90,30 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
-      - name: 'Python環境のセットアップ (Setup Python)'
+      - name: 'Python依存ファイルの有無を判定 (Detect Python Deps File)'
+        id: pydeps
         if: ${{ inputs.python_version != '' }}
+        run: |
+          if [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 依存ファイル（requirements.txt / pyproject.toml）がある場合のみ pip キャッシュを有効化する
+      # （setup-python の pip キャッシュはキー算出にこれらのファイルを必須とするため）
+      - name: 'Python環境のセットアップ (Setup Python, with cache)'
+        if: ${{ inputs.python_version != '' && steps.pydeps.outputs.exists == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
           cache: 'pip'
+
+      - name: 'Python環境のセットアップ (Setup Python, no cache)'
+        if: ${{ inputs.python_version != '' && steps.pydeps.outputs.exists == 'false' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
 
       - name: 'Python依存関係のインストール (Install Python Deps if requirements.txt exists)'
         if: ${{ inputs.python_version != '' }}

@@ -38,11 +38,29 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: 'Python環境のセットアップ (Setup Python)'
+    - name: 'Python依存ファイルの有無を判定 (Detect Python Deps File)'
+      id: pydeps
+      shell: bash
+      run: |
+        if [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # 依存ファイルがある場合のみ pip キャッシュを有効化する
+    - name: 'Python環境のセットアップ (Setup Python, with cache)'
+      if: ${{ steps.pydeps.outputs.exists == 'true' }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python_version }}
         cache: 'pip'
+
+    - name: 'Python環境のセットアップ (Setup Python, no cache)'
+      if: ${{ steps.pydeps.outputs.exists == 'false' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
 
     - name: 'Playwright(chromium)のインストール (Install Playwright)'
       shell: bash
