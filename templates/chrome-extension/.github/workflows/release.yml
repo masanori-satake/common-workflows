@@ -1,0 +1,17 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  # （任意）ビルド処理を先に行う場合はここに build ジョブを追加
+
+  release:
+    uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
+    permissions:
+      contents: write
+    with:
+      # アセット（zip等）を付与する場合は下記を有効化
+      # artifact_path: 'dist/*.zip'

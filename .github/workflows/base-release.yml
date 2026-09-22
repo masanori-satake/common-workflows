@@ -1,0 +1,53 @@
+name: Base Release
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: false
+        type: string
+        default: ${{ github.ref_name }}
+      release_name:
+        description: 'Release title (defaults to tag name)'
+        required: false
+        type: string
+        default: ''
+      artifact_path:
+        description: 'Path to build artifact to attach (e.g. dist/*.zip)'
+        required: false
+        type: string
+        default: ''
+      draft:
+        description: 'Create draft release'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Create prerelease'
+        required: false
+        type: boolean
+        default: false
+    permissions:
+      contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name }}
+          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag_name }}
+          files: ${{ inputs.artifact_path }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
