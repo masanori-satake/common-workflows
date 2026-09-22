@@ -1,53 +1,124 @@
-name: Base Release
+name: '共通リリース処理 (Base Release)'
 
 on:
   workflow_call:
     inputs:
+      project_name:
+        description: 'プロジェクト識別名（ZIPファイル名プレフィックス）'
+        required: false
+        type: string
+        default: ${{ github.event.repository.name }}
+      build_dir:
+        description: 'ZIP化する対象ディレクトリ（例: dist, build）'
+        required: false
+        type: string
+        default: 'dist'
+    outputs:
+      version:
+        description: '抽出されたバージョン番号 (例: 1.2.0)'
+        value: ${{ jobs.release.outputs.version }}
       tag_name:
-        description: 'Release tag name (e.g. v1.0.0)'
-        required: false
-        type: string
-        default: ${{ github.ref_name }}
-      release_name:
-        description: 'Release title (defaults to tag name)'
-        required: false
-        type: string
-        default: ''
-      artifact_path:
-        description: 'Path to build artifact to attach (e.g. dist/*.zip)'
-        required: false
-        type: string
-        default: ''
-      draft:
-        description: 'Create draft release'
-        required: false
-        type: boolean
-        default: false
-      prerelease:
-        description: 'Create prerelease'
-        required: false
-        type: boolean
-        default: false
-    permissions:
-      contents: write
+        description: '生成されたタグ名 (例: v1.2.0)'
+        value: ${{ jobs.release.outputs.tag_name }}
 
 jobs:
-  create-release:
+  release:
+    name: 'リリースパッケージ作成・公開 (Build & Publish Release)'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
+
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+      tag_name: ${{ steps.extract_version.outputs.tag_name }}
+
     steps:
-      - name: Checkout code
+      - name: 'コードのチェックアウト (Checkout Code)'
         uses: actions/checkout@v4
 
-      - name: Create GitHub Release
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: '依存関係のインストールとビルド (Install & Build)'
+        run: |
+          npm ci
+          npm run build --if-present
+
+      - name: 'バージョン情報の自動抽出 (Extract Version from Manifest/Package)'
+        id: extract_version
+        run: |
+          node -e '
+            const fs = require("fs");
+            let version = "";
+            if (fs.existsSync("manifest.json")) {
+              version = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
+            } else if (fs.existsSync("package.json")) {
+              version = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+            } else {
+              console.error("Error: Neither manifest.json nor package.json was found.");
+              process.exit(1);
+            }
+            if (!version) {
+              console.error("Error: Version field is missing.");
+              process.exit(1);
+            }
+            const tagName = `v${version}`;
+            console.log(`Extracted Version: ${version}`);
+            console.log(`Generated Tag: ${tagName}`);
+            
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag_name=${tagName}\n`);
+          '
+
+      - name: 'リリース用アーカイブの作成 (Create Release ZIP Archive)'
+        id: package
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          PROJECT_NAME="${{ inputs.project_name }}"
+          BUILD_DIR="${{ inputs.build_dir }}"
+          ZIP_NAME="${PROJECT_NAME}-v${VERSION}.zip"
+
+          if [ -d "$BUILD_DIR" ]; then
+            cd "$BUILD_DIR" && zip -r "../$ZIP_NAME" ./* && cd ..
+          else
+            zip -r "$ZIP_NAME" . -x "*.git*" "node_modules/*" ".github/*"
+          fi
+
+          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+
+      - name: 'Gitタグの自動作成と更新 (Create or Update Git Tag)'
+        run: |
+          TAG_NAME="${{ steps.extract_version.outputs.tag_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$TAG_NAME"
+          git push origin "$TAG_NAME" --force
+
+      - name: 'GitHub Releaseの作成とアセット添付 (Create GitHub Release)'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag_name }}
-          name: ${{ inputs.release_name != '' && inputs.release_name || inputs.tag_name }}
-          files: ${{ inputs.artifact_path }}
-          draft: ${{ inputs.draft }}
-          prerelease: ${{ inputs.prerelease }}
+          tag_name: ${{ steps.extract_version.outputs.tag_name }}
+          name: ${{ inputs.project_name }}${{ steps.extract_version.outputs.tag_name }}
+          files: ${{ steps.package.outputs.zip_name }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: '実行結果サマリーの出力 (Output Step Summary)'
+        if: always()
+        run: |
+          cat << 'EOF' >> $GITHUB_STEP_SUMMARY
+          ### 📦 リリリースパッケージ作成結果 (Release Package Summary)
+
+          | 項目 (Item) | 設定値 (Value) |
+          | :--- | :--- |
+          | **抽出バージョン (Version)** | `${{ steps.extract_version.outputs.version }}` |
+          | **生成タグ名 (Tag Name)** | `${{ steps.extract_version.outputs.tag_name }}` |
+          | **パッケージファイル (ZIP File)** | `${{ steps.package.outputs.zip_name }}` |
+
+          ✅ リリースアセットの作成と GitHub Release への登録が完了しました。
+          EOF

@@ -1,17 +1,24 @@
-name: Release
+name: 'リリースパッケージ作成 (Release Package)'
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches:
+      - main
+    paths:
+      - 'manifest.json'
+      - 'package.json'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # （任意）ビルド処理を先に行う場合はここに build ジョブを追加
-
   release:
+    name: '共通リリース処理の呼び出し (Invoke Base Release)'
     uses: masanori-satake/common-workflows/.github/workflows/base-release.yml@v1
     permissions:
       contents: write
     with:
-      # アセット（zip等）を付与する場合は下記を有効化
-      # artifact_path: 'dist/*.zip'
+      project_name: 'my-chrome-extension'
+      build_dir: 'dist'
