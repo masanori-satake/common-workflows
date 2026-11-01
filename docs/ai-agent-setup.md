@@ -1,0 +1,309 @@
+# Gemini AI エージェント導入ガイド（Web 画面編） (Gemini AI Agent Setup Guide)
+
+GitHub の Issue に作業内容を書くだけで、AI（Aider + Gemini API 無料枠）がコードを修正し、
+Pull Request を作成する仕組みを、自分のリポジトリに導入するための手順書です。
+**すべての操作をブラウザ（GitHub / Google AI Studio の Web 画面）で完結**できます。
+
+> 画面上のボタン名は 2026 年時点の GitHub / Google AI Studio の英語 UI 表記です。
+> UI 変更で名称が変わることがあります。
+
+---
+
+## 目次
+
+1. [仕組みの概要](#1-仕組みの概要)
+2. [事前準備: Gemini API キーの発行](#2-事前準備-gemini-api-キーの発行)
+3. [リポジトリの設定（4 ステップ）](#3-リポジトリの設定4-ステップ)
+4. [使い方](#4-使い方)
+5. [動作確認](#5-動作確認)
+6. [カスタマイズ](#6-カスタマイズ)
+7. [注意事項](#7-注意事項)
+8. [トラブルシューティング](#8-トラブルシューティング)
+
+---
+
+## 1. 仕組みの概要
+
+```text
+Issue に ai-task ラベル付与 / "/ai ..." とコメント
+        │
+        ▼
+ai-coder-trigger.yml（あなたのリポジトリ）
+        │  uses: …/gemini-ai-agent-template.yml@v1
+        ▼
+共通ワークフロー（common-workflows）
+  1. コードをチェックアウト・依存関係をインストール
+  2. Issue の内容から指示文と対象ファイルを抽出
+  3. Aider + Gemini でコードを修正 → テスト → 失敗したら AI が自己修正
+     （429 レートリミット時は 30s → 60s → 120s 待って自動リトライ）
+  4. 変更があれば PR を作成し、Issue にリンクをコメント
+```
+
+| 用意するもの | 用途 |
+| :--- | :--- |
+| Google アカウント | Gemini API キーの発行（無料枠はクレジットカード登録不要） |
+| GitHub リポジトリの管理者権限 | Secrets・Actions 設定の変更 |
+
+---
+
+## 2. 事前準備: Gemini API キーの発行
+
+1. ブラウザで [Google AI Studio の API キー画面](https://aistudio.google.com/apikey) を開き、Google アカウントでログインします。
+2. 初回は利用規約への同意画面が表示されるので、内容を確認して同意します。
+3. **「Create API key」** をクリックします。
+4. Google Cloud プロジェクトの選択を求められた場合は、既存のプロジェクトを選ぶか、新規作成します。
+5. 表示された API キー（`AIza` で始まる文字列）の **コピーボタン** をクリックしてコピーします。
+
+> ⚠️ API キーはパスワードと同じです。チャット・Issue・コミットなどに貼り付けないでください。
+> 漏えいした場合は、同じ画面でキーを削除して再発行してください。
+
+> ℹ️ **無料枠のデータ取り扱い**: Gemini API の無料枠では、送信した内容（コードを含む）が
+> Google のサービス改善に利用される場合があります。非公開コードを扱う場合は、
+> [Gemini API 利用規約](https://ai.google.dev/gemini-api/terms) を確認したうえで利用してください。
+
+> ℹ️ **無料枠の上限**: 1 分あたり・1 日あたりのリクエスト数に上限があります。
+> 現在の上限は [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) で確認できます。
+
+---
+
+## 3. リポジトリの設定（4 ステップ）
+
+以下、`<owner>/<repo>` はあなたのリポジトリ（例: `masanori-satake/StructMap-Solo`）に読み替えてください。
+
+### ステップ 1: シークレット `GEMINI_API_KEY` を登録する
+
+1. `https://github.com/<owner>/<repo>` を開き、上部タブの **「Settings」** をクリックします。
+2. 左メニュー「Security」欄の **「Secrets and variables」** → **「Actions」** をクリックします。
+3. 「Secrets」タブで **「New repository secret」** をクリックします。
+4. 次のとおり入力します。
+
+   | 項目 | 入力値 |
+   | :--- | :--- |
+   | Name | `GEMINI_API_KEY`（大文字・完全一致） |
+   | Secret | 手順 2 でコピーした API キー（前後に空白・改行を入れない） |
+
+5. **「Add secret」** をクリックします。
+6. 一覧に `GEMINI_API_KEY` が表示されれば完了です。
+   登録後は値を表示できません。変更する場合は鉛筆アイコン（Update）から上書きします。
+
+### ステップ 2: ラベル `ai-task` を作成する
+
+1. 上部タブの **「Issues」** を開き、検索欄の右にある **「Labels」** をクリックします。
+   （`https://github.com/<owner>/<repo>/labels` を直接開いても構いません）
+2. 右上の **「New label」** をクリックします。
+3. 次のとおり入力します。
+
+   | 項目 | 入力値 |
+   | :--- | :--- |
+   | Label name | `ai-task`（完全一致で判定されます） |
+   | Description | `Gemini AI エージェントに作業を依頼` |
+   | Color | 任意（例: `#7057ff`） |
+
+4. **「Create label」** をクリックします。
+
+### ステップ 3: GitHub Actions に PR 作成を許可する
+
+1. **「Settings」** → 左メニューの **「Actions」** → **「General」** をクリックします。
+2. ページ上部の「Actions permissions」は、既存の CI が動いていれば **変更不要** です。
+3. ページ下部の **「Workflow permissions」** までスクロールします。
+   - 上のラジオボタン（「Read repository contents and packages permissions」/
+     「Read and write permissions」）は **現在の選択のまま** で構いません。
+     必要な権限は呼び出し側ワークフローで個別に付与しています。
+   - **「Allow GitHub Actions to create and approve pull requests」にチェック** を入れます。
+4. そのセクションの **「Save」** をクリックします。
+
+> この設定が無効だと、AI が修正をブランチに push した後、PR 作成のところで 403 エラーになります。
+
+### ステップ 4: 呼び出し側ワークフローを追加する
+
+テンプレートディレクトリ（`templates/<種別>/`）をまるごとコピーして作成したリポジトリには、
+`.github/workflows/ai-coder-trigger.yml` が既に含まれています。その場合は **このステップは不要** です。
+
+既存リポジトリに追加する場合は、以下の手順で行います（`main` が保護されている前提で、PR 経由で追加します）。
+
+1. 使用するテンプレートを開き、ファイル表示右上の **「Copy raw file」**（コピーアイコン）をクリックします。
+
+   | プロジェクト種別 | テンプレート |
+   | :--- | :--- |
+   | VS Code 拡張機能 | [templates/vscode-extension/.github/workflows/ai-coder-trigger.yml](https://github.com/masanori-satake/common-workflows/blob/main/templates/vscode-extension/.github/workflows/ai-coder-trigger.yml) |
+   | Chrome 拡張機能 | [templates/chrome-extension/.github/workflows/ai-coder-trigger.yml](https://github.com/masanori-satake/common-workflows/blob/main/templates/chrome-extension/.github/workflows/ai-coder-trigger.yml) |
+
+2. あなたのリポジトリのトップページで **「Add file」** → **「Create new file」** をクリックします。
+3. ファイル名欄に `.github/workflows/ai-coder-trigger.yml` と入力します（`/` を入力するとフォルダとして区切られます）。
+4. 本文欄にコピーした内容を貼り付けます。
+5. 右上の **「Commit changes...」** をクリックし、次のとおり入力します。
+
+   | 項目 | 入力値 |
+   | :--- | :--- |
+   | Commit message | `chore: Gemini AI エージェント起動ワークフローを追加` |
+   | 選択肢 | **「Create a new branch for this commit and start a pull request」** |
+   | ブランチ名 | `chore/ai-coder-trigger` |
+
+6. **「Propose changes」** → 次の画面で **「Create pull request」** をクリックします。
+7. 既存の CI が通ることを確認し、**「Squash and merge」** でマージします。
+
+> ⚠️ Issue / コメントをトリガーとするワークフローは、**既定ブランチ（main）にマージされるまで動きません**。
+> PR を作っただけの状態では起動しないので、必ずマージしてください。
+
+> ℹ️ `.github/` 配下のみの変更なので、AGENTS.md の規定によりバージョン更新は不要です。
+
+### 設定完了チェックリスト
+
+| 確認場所 | 期待される状態 |
+| :--- | :--- |
+| Settings → Secrets and variables → Actions | `GEMINI_API_KEY` が表示されている |
+| Issues → Labels | `ai-task` が存在する |
+| Settings → Actions → General | 「Allow GitHub Actions to create and approve pull requests」がオン |
+| Code タブで `.github/workflows/` を開く | `main` に `ai-coder-trigger.yml` がある |
+
+---
+
+## 4. 使い方
+
+### 方法 A: ラベルで依頼する（新しい作業向け）
+
+1. **「Issues」** → **「New issue」** で Issue を作成します。
+   - **タイトル** と **本文** がそのまま AI への指示になります。
+2. 右サイドバーの **「Labels」** から `ai-task` を付与します。
+   - Issue 作成時に付けても、作成後に付けても起動します。
+
+### 方法 B: コメントで依頼する（追加の指示・やり直し向け）
+
+既存の Issue に、`/ai` で始まるコメントを投稿します。
+
+```text
+/ai エラーメッセージを日本語にしてください。
+```
+
+- コメントの指示に加え、Issue のタイトル・本文も背景情報として AI に渡されます。
+- コメントで起動できるのは、リポジトリの **Owner / Member / Collaborator** だけです。
+- Pull Request 上のコメントでは起動しません。
+
+### 対象ファイルを指定する（推奨）
+
+本文またはコメントに `Files:` 行を書くと、**そのファイルだけ** を AI に渡します。
+AI が読む量が減るため、無料枠のトークン消費とレートリミットを大きく抑えられます。
+
+```text
+ツリー表示で空配列のノードが「[]」と表示されないので、表示されるようにしてください。
+
+Files: src/core/renderers/TreeRenderer.ts, src/core/model/index.ts
+```
+
+- 複数ファイルはカンマ区切りで指定します。リポジトリルートからの相対パスで書きます。
+- Git 管理されている既存ファイルのみ指定できます（新規ファイルは AI が必要に応じて作成します）。
+- 日本語や空白を含むパス、`..` を含むパスは安全のため無視されます。
+- 指定しない場合は、AI がリポジトリ全体の構造（リポジトリマップ）から対象を判断します。
+
+### 良い指示の書き方
+
+| ポイント | 例 |
+| :--- | :--- |
+| 何をどう変えるかを具体的に書く | 「`parseXml` が空要素で例外を投げるので、空オブジェクトを返すようにする」 |
+| 完了条件を書く | 「既存テストがすべて通ること」 |
+| 1 Issue 1 作業にする | 複数の修正は Issue を分ける |
+| 対象ファイルを `Files:` で絞る | `Files: src/core/parsers/xml/XmlParser.ts` |
+
+---
+
+## 5. 動作確認
+
+初回は、バージョン更新が不要なドキュメント（`docs/` 配下など）で試すのが安全です。
+
+1. 次の内容で Issue を作成し、`ai-task` ラベルを付与します。
+
+   ```text
+   タイトル: ARCHITECTURE.md の冒頭を整える
+   本文:
+   docs/ARCHITECTURE.md の冒頭段落を、より簡潔な日本語に整えてください。
+
+   Files: docs/ARCHITECTURE.md
+   ```
+
+2. 上部タブの **「Actions」** を開くと、「Gemini AI コーダー起動 (Trigger Gemini AI Coder)」が実行中になります。
+   通常 3〜10 分程度で完了します（レートリミット時はリトライ待ちで延びます）。
+3. 実行をクリックすると、**Summary** に以下が表示されます。
+   - 🤖 AI への指示内容（対象ファイルの採否）
+   - 🛠️ Aider 実行結果（試行回数・テスト結果）
+   - 作成された PR の URL
+4. Issue に「🤖 Gemini AI エージェントが PR を作成しました」というコメントが付きます。
+5. PR を開いて差分を確認します。
+   - テストが失敗した場合は **Draft PR** として作成されます。
+   - AI とのやり取りの詳細は、実行画面下部 **「Artifacts」** の `aider-logs-*` をダウンロードすると確認できます（7 日間保存）。
+
+### 作成された PR で CI を動かす
+
+GitHub の仕様により、ワークフローが作成した PR では CI（Code Quality 等）が **自動起動しません**。
+PR 画面の下部で **「Close pull request」** → **「Reopen pull request」** をクリックすると CI が起動します。
+
+### 修正が不十分だった場合
+
+- PR は閉じて、元の Issue に `/ai <追加の指示>` とコメントすると、新しい PR が作成されます。
+- 人間が PR ブランチに直接コミットして仕上げても構いません。
+
+---
+
+## 6. カスタマイズ
+
+`.github/workflows/ai-coder-trigger.yml` の `with:` で上書きできます。原則は既定値のままで構いません。
+
+| 入力 | 既定値 | 説明 |
+| :--- | :--- | :--- |
+| `model_name` | `gemini-2.5-flash` | 使用する Gemini モデル |
+| `test_command` | `npm test` | 修正後に実行するテスト。空文字 `''` で自動テスト無効（VS Code テンプレートは `xvfb-run --auto-servernum npm test`） |
+| `target_branch` | リポジトリの既定ブランチ | 作業のベースブランチ |
+| `max_retries` | `4` | 429 発生時の最大試行回数 |
+| `initial_delay` | `30` | 初回リトライまでの待機秒数（以降 2 倍） |
+| `allowed_associations` | `OWNER,MEMBER,COLLABORATOR` | コメント起動を許可する関係者（カンマ区切り・空白なし） |
+| `timeout_minutes` | `30` | ジョブのタイムアウト（分） |
+
+### AI に読ませないファイルを指定する（`.aiderignore`）
+
+リポジトリルートに `.aiderignore` が無い場合、`node_modules/`・`dist/`・`out/`・ロックファイル・
+`.env` などを除外する既定のファイルが実行時に自動生成されます（コミットはされません）。
+独自に指定したい場合は、`.gitignore` と同じ書式で `.aiderignore` をリポジトリに追加してください。
+
+---
+
+## 7. 注意事項
+
+- **必ず人間がレビューしてからマージしてください。** AI の変更は誤りを含むことがあります。
+- **バージョン更新ルール**: VSIX / ZIP に含まれるファイル（`src/`、`README.md` など）を変更すると、
+  AGENTS.md の規定によりバージョン更新が必要です。AI はこのルールを自動では適用しません。
+  該当する修正を依頼する場合は、指示に次のように書き添えてください。
+
+  ```text
+  あわせて package.json / package-lock.json / README.md / CHANGELOG.md のバージョンを 1.8.1 に更新し、
+  CHANGELOG.md に変更内容を日本語で追記してください。
+
+  Files: src/xxx.ts, package.json, package-lock.json, README.md, CHANGELOG.md
+  ```
+
+- **第三者の Issue にラベルを付ける前に本文を確認してください。** ラベルを付けた時点で、
+  その本文を AI への指示として承認したことになります。
+- **ワークフローファイルは変更されません。** `.github/workflows/` は AI の読込・コミット対象外です。
+- AI はシェルコマンドの実行や URL の取得を行わない設定になっています。
+
+---
+
+## 8. トラブルシューティング
+
+実行結果は **「Actions」** タブ → 該当の実行 → ジョブのログで確認できます。
+
+| 症状 | 原因と対処 |
+| :--- | :--- |
+| Actions タブに実行が現れない | `ai-coder-trigger.yml` が main にマージされていない（[ステップ 4](#ステップ-4-呼び出し側ワークフローを追加する)） |
+| 実行はあるがジョブが「Skipped」 | ラベル名が `ai-task` でない / コメントが `/ai` で始まっていない / 権限のないユーザーのコメント / PR 上のコメント |
+| `GEMINI_API_KEY が未設定です` | [ステップ 1](#ステップ-1-シークレット-gemini_api_key-を登録する) の名前の誤り（大文字・完全一致） |
+| `AuthenticationError` / `API key not valid` | API キーの誤り・削除済み。キーを再発行し、シークレットを Update で上書き |
+| `NotFoundError` | `model_name` の誤り。利用可能なモデル名を確認 |
+| 4 回リトライしても 429 で失敗 | 1 日あたりの上限に到達した可能性。リセット（太平洋時間 0 時 = 日本時間 16〜17 時）後に `/ai` コメントで再実行 |
+| PR 作成で 403 エラー | [ステップ 3](#ステップ-3-github-actions-に-pr-作成を許可する) のチェックが入っていない |
+| PR が Draft で作成された | AI 修正後の最終テストが失敗。PR 本文とジョブログのテスト結果を確認 |
+| 「変更はありませんでした」とコメントされた | 指示が曖昧、または対象ファイルが除外された。Summary の対象ファイル表と指示内容を見直す |
+| PR で CI が動かない | GitHub の仕様。PR を Close → Reopen する |
+| 失敗時に Issue へ ⚠️ コメントが付いた | コメント内の「実行ログ」リンクからエラー内容を確認 |
+
+---
+
+関連ドキュメント: [共通ワークフロー運用ガイドライン 15 章](./workflow-guidelines.md#15-gemini-ai-エージェント-gemini-ai-agent)
