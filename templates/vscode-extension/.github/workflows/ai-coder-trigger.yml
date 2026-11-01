@@ -1,0 +1,44 @@
+name: 'Gemini AI コーダー起動 (Trigger Gemini AI Coder)'
+
+# 起動方法 (How to trigger):
+#   - Issue に `ai-task` ラベルを付与する（Issue のタイトル・本文が指示文になる）
+#   - Issue に `/ai <指示>` で始まるコメントを投稿する（OWNER / MEMBER / COLLABORATOR のみ）
+#   - 本文に `Files: src/a.ts, src/b.ts` 行を書くと、そのファイルだけを AI に渡す
+#
+# 事前準備 (Setup):
+#   - リポジトリの Secrets に GEMINI_API_KEY（Google AI Studio の API キー）を登録する
+#   - Settings > Actions > General で "Allow GitHub Actions to create and approve pull requests" を有効化する
+#
+# concurrency について:
+#   ワークフロー単位の concurrency を置くと、/ai 以外の通常コメントで起動した（if で
+#   スキップされる）実行が、待機中の正規の実行を置き換えてキャンセルしてしまう。
+#   そのため多重実行防止は共通ワークフロー側のジョブ単位（Issue 単位）で行う。
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+jobs:
+  ai-agent:
+    name: 'Gemini AI エージェント実行 (Execute Gemini AI Agent)'
+    if: >-
+      (github.event_name == 'issues' && github.event.label.name == 'ai-task') ||
+      (github.event_name == 'issue_comment' &&
+        !github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/ai') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    uses: masanori-satake/common-workflows/.github/workflows/gemini-ai-agent-template.yml@v1
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    with:
+      # VSCode 拡張機能の拡張ホストテストはディスプレイが必要なため xvfb でラップする
+      test_command: 'xvfb-run --auto-servernum npm test'
+      # 必要に応じてのみ上書きする:
+      # model_name: 'gemini-2.5-flash'
+      # target_branch: 'main'
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
