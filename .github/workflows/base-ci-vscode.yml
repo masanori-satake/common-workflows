@@ -1,0 +1,101 @@
+name: 'VSCode拡張機能CI (Base CI for VSCode Extension)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - Node.js           : lts/*        （常に最新 LTS を追従）
+#   - 依存インストール  : npm ci       （package-lock.json 前提・再現性重視）
+#   - 版チェック        : scripts/check-version.js --check-bump（VSIX 関連性フィルタ付き）
+#   - Lint              : npm run lint --if-present
+#   - Test              : xvfb-run --auto-servernum npm test（VSCode 拡張機能テストに必須）
+#   - Build             : npm run build --if-present（tsc / esbuild 両方式を吸収）
+#   - Package Check     : npx @vscode/vsce package（VSIX 生成可否を PR 時点で検証）
+#
+# 既有 base-ci.yml（Chrome 向け）との差異:
+#   - Python セットアップ不要
+#   - scripts/ci_checks.py でなく scripts/check-version.js を実行
+#   - npm run test を xvfb-run --auto-servernum でラップ（VSCode 必須）
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      run_version_check:
+        description: '版バンプ・整合性チェックを実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_lint:
+        description: '静的解析(Lint)を実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_test:
+        description: '単体テストを実行するか（xvfb-run でラップ）'
+        required: false
+        type: boolean
+        default: true
+      run_build:
+        description: 'ビルドを実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_package_check:
+        description: 'VSIXパッケージングを検証するか（vsce package を実行し、成果物は破棄）'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  ci:
+    name: '品質検証・ビルド (Validate & Build)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+        with:
+          # 版バンプ比較のため全履歴を取得する
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: '依存関係のインストール (Install Dependencies)'
+        run: npm ci
+
+      - name: '版バンプ・整合性チェック (Check Version Bump and Consistency)'
+        if: ${{ inputs.run_version_check }}
+        env:
+          VERSION_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
+        run: node scripts/check-version.js --check-bump
+
+      - name: '静的解析の実行 (Lint)'
+        if: ${{ inputs.run_lint }}
+        run: npm run lint --if-present
+
+      - name: '単体テストの実行 (Test, wrapped with xvfb)'
+        if: ${{ inputs.run_test }}
+        run: xvfb-run --auto-servernum npm test
+
+      - name: 'ビルドの実行 (Build)'
+        if: ${{ inputs.run_build }}
+        run: npm run build --if-present
+
+      # .vscodeignore や package.json マニフェストの不備をリリース前（PR 時点）に検出する。
+      # 生成した VSIX は検証専用のため一時ディレクトリへ出力し、アップロードはしない。
+      - name: 'VSIXパッケージングの検証 (Verify VSIX Packaging)'
+        if: ${{ inputs.run_package_check }}
+        run: npx @vscode/vsce package --no-git-tag-version --out "$RUNNER_TEMP/package-check.vsix"

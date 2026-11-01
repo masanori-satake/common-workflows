@@ -4,7 +4,10 @@
 # build outputs
 /dist
 /build
+/out
+/.vscode-test
 *.zip
+*.vsix
 
 # logs & OS files
 *.log
