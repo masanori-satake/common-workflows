@@ -169,9 +169,9 @@ runs:
           *) test_label="⏭️ 未実行" ;;
         esac
         retries=$(( ${ATTEMPTS:-1} - 1 ))
+        # 経過（History）には見出しだけが残るため、試行回数とテスト結果は見出しに含める
         bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update \
-          "🔍 AI の作業が完了しました" \
-          "試行 ${ATTEMPTS:-1} 回（うちレートリミットによる再試行 ${retries} 回）・最終テスト: ${test_label}"
+          "🔍 AI の作業が完了しました（試行 ${ATTEMPTS:-1} 回・再試行 ${retries} 回・最終テスト: ${test_label}）"
 
     - name: 'Aider ログの保存 (Upload Aider Logs)'
       if: ${{ always() }}

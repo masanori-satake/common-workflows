@@ -444,7 +444,9 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 - 状況表示 composite action: `.github/actions/gemini-ai-agent-status`（`status_comment.sh`）
   - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿
   - 状況コメント 1 件を段階ごとに書き換え（準備中 → 作業中 → 作業完了（試行回数・テスト結果）→ PR 作成 → 完了）
-  - 状況更新は Aider 実行ステップの前後の専用ステップでのみ行う（Aider 実行中の 429 待機などはリアルタイム表示しない）
+  - Aider 実行ステップの中では状況を更新しない（429 待機などはリアルタイム表示しない）。更新するのは
+    Aider の前後の専用ステップ（準備中・作業中・作業完了）、PR 作成処理（`create_pr.sh` の「PR を作成中」）、
+    完了ステップ（`finish`）のみ
   - 完了時に 👀 を 🚀 / 😕 に切り替え。書き換えでは通知が飛ばないため、結果は新規コメントでも知らせる
   - 補助機能のため、API エラーが起きても本体の処理は失敗させない
 - 呼び出し側テンプレート: `templates/<種別>/.github/workflows/ai-coder-trigger.yml`
