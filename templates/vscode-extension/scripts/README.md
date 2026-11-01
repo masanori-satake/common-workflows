@@ -15,7 +15,8 @@ CI 上で実行します。また pre-commit フックがローカルで同じ�
 | :--- | :--- | :--- |
 | `check-version.js` | 複数ファイルの版整合性検査 ＋ VSIX 関連性フィルタ付き版バンプ検査 | `base-ci-vscode.yml` が `node scripts/check-version.js --check-bump` を実行 |
 | `update-version.js` | package.json / package-lock.json / README.md / CHANGELOG.md の版を一括更新し、最後に `check-version.js` で検証 | ローカル `npm run update-version` から呼ぶ（ワークフロー未使用） |
-| `run-pre-commit-check.sh` | pre-commit フック用エントリ（`check-version.js --check-bump` を呼ぶ） | `.pre-commit-config.yaml` の local hook から呼ぶ |
+| `check-readme-anchors.js` | README.md の `##` / `###` 見出しへの ASCII ID（`<a id="...">`）付け忘れ、ページ内リンク先の不一致、ID の重複を検査 | `package.json` の `lint` から `npm run check-readme-anchors` で呼ぶ（`base-ci-vscode.yml` の Lint ステップで実行される） |
+| `run-pre-commit-check.sh` | pre-commit フック用エントリ（`check-version.js --check-bump` と `check-readme-anchors.js` を呼ぶ） | `.pre-commit-config.yaml` の local hook から呼ぶ |
 
 ## 編集箇所
 
@@ -46,6 +47,20 @@ readme = readme.replace(new RegExp(`meetdock-solo-${oldVersion.replace(/\./g, '\
 
 `<package-name>` は package.json の `"name"` フィールド等、VSIX ファイル名の
 プレフィックスに置き換えてください。
+
+### check-readme-anchors.js
+両 VSCode リポジトリで完全一致の実装であり、編集不要です。
+
+VS Code の拡張機能詳細ページでは、絵文字や日本語を含む見出しから自動生成される ID や
+`<a name="...">` ではページ内ジャンプが機能しない場合があります。そのため README.md では
+見出しの直前に ASCII の `<a id="..."></a>` を置き、目次などのリンクはその ID を参照する
+規約とし、本スクリプトで検査します。`scripts.lint` を実装に合わせて書き換える際は、
+末尾の `&& npm run check-readme-anchors` を残してください。
+
+```markdown
+<a id="en-key-features"></a>
+### 💡 Key Features
+```
 
 ### run-pre-commit-check.sh / .pre-commit-config.yaml
 両 VSCode リポジトリで完全一致の実装であり、編集不要です。

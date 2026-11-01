@@ -5,6 +5,7 @@
 `base-release-vscode.yml` / `base-security.yml`）を `@v1` タグで参照し、
 標準準拠の CI/CD をコピーするだけで利用できます。
 
+<a id="usage"></a>
 ## 利用方法
 
 1. このディレクトリ（`templates/vscode-extension/`）の中身を新規リポジトリの
@@ -15,6 +16,7 @@
    - `engines.vscode`（必要に応じて）
    - `main`（ビルド方式に応じて `./out/extension.js` または `./dist/extension.js`）
    - `scripts.build` / `scripts.lint` / `scripts.test` を実装に合わせて書き換え
+     （`scripts.lint` を書き換える際は、末尾の `&& npm run check-readme-anchors` を残してください）
 
 3. `scripts/update-version.js` の「★ プロジェクトごとに編集する箇所 ★」を
    プロジェクト固有の VSIX ファイル名プレフィックスに書き換えます。
@@ -32,11 +34,18 @@
 6. `common-workflows` リポジトリの `v1` タグが最新 commit を指していることを
    確認してください（タグの移動はユーザーが手動で行います）。
 
-7. （任意）Gemini AI エージェントを使う場合は、
+7. プロジェクトの `README.md` では、`##` / `###` 見出しの直前に ASCII の
+   `<a id="..."></a>` を置き、目次などのページ内リンクはその ID を参照します。
+   VS Code の拡張機能詳細ページでは、絵文字や日本語を含む見出しの自動 ID や
+   `<a name="...">` ではジャンプできない場合があるためです。
+   `scripts/check-readme-anchors.js` が `npm run lint` と pre-commit フックでこの規約を検査します。
+
+8. （任意）Gemini AI エージェントを使う場合は、
    [Gemini AI エージェント導入ガイド](https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md)
    に従って `GEMINI_API_KEY` シークレット・`ai-task` ラベル・Actions の PR 作成許可を設定します。
    使わない場合は `.github/workflows/ai-coder-trigger.yml` を削除してください。
 
+<a id="files"></a>
 ## 含まれるファイル
 
 | パス | 役割 |
@@ -48,6 +57,7 @@
 | `.github/osv-scanner.toml` | OSV-Scanner 設定（devDependencies の脆弱性を合否判定から除外） |
 | `scripts/check-version.js` | 版整合性 ＋ 版バンプ検査（正本テンプレート・編集不要） |
 | `scripts/update-version.js` | 版一括更新（★ VSIX ファイル名正規表現を編集） |
+| `scripts/check-readme-anchors.js` | README のページ内リンク・見出し ID 検査（正本テンプレート・編集不要） |
 | `scripts/run-pre-commit-check.sh` | pre-commit フック用エントリ（正本テンプレート・編集不要） |
 | `scripts/README.md` | スクリプトの役割と編集指針 |
 | `.pre-commit-config.yaml` | pre-commit フック定義（正本テンプレート・編集不要） |
@@ -57,6 +67,7 @@
 | `.gitignore` | 無視対象定義（node_modules / dist / out / *.vsix / .agents 等） |
 | `.vscodeignore` | VSIX から除外するファイルの定義（★ ビルド方式に合わせて調整） |
 
+<a id="workflows"></a>
 ## ワークフローの動作
 
 - **コード品質検証 (code-quality.yml):** push / PR 時に版チェック・Lint・
