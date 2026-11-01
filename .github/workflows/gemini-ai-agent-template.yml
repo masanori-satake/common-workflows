@@ -7,7 +7,7 @@ name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
 # Studio 無料枠）でコードを修正し、変更があれば Pull Request を作成する。
 #
 # 統一パラメータ方針 (Unified Parameters Policy)
-#   - モデル            : gemini/gemini-2.5-flash
+#   - モデル            : gemini/gemini-3.8-flash
 #   - Aider             : aider-chat をバージョン固定でインストール（Python 3.12）
 #   - 依存インストール  : package.json があれば lockfile 自動判定（npm ci / npm install）
 #   - 自動テスト        : --auto-test --test-cmd（失敗時は AI が自己修正。空なら無効）
@@ -43,7 +43,7 @@ on:
         description: '使用する Gemini モデル名（gemini/ プレフィックスは不要）'
         required: false
         type: string
-        default: 'gemini-2.5-flash'
+        default: 'gemini-3.8-flash'
       test_command:
         description: 'Aider が修正後に実行する自動テストコマンド（空なら自動テスト無効）'
         required: false
@@ -116,10 +116,13 @@ jobs:
       pull-requests: write
     # 多重実行防止: 同一 Issue（Issue イベントは常に既定ブランチ上で動くため、
     # ブランチ単位ではなく Issue 単位で直列化する）。実行中のジョブはキャンセルしない。
+    # queue: max で待機中のリクエストも置き換えずに順番待ちさせる（既定では待機は 1 件のみで、
+    # 後続が来ると待機中のものがキャンセルされる）。
     # 呼び出し側と同名のグループを使うとデッドロックするため、固有のプレフィックスを付ける。
     concurrency:
       group: gemini-ai-agent-${{ github.repository }}-${{ github.event.issue.number || github.ref }}
       cancel-in-progress: false
+      queue: max
 
     steps:
       - name: 'コードのチェックアウト (Checkout Repository)'

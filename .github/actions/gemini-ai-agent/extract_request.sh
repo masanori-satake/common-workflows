@@ -51,19 +51,36 @@ if [ -z "$instruction" ] && [ -z "$issue_title" ]; then
   exit 1
 fi
 
+TRUNC_MARK=$'\n\n'"[... truncated ...]"
+truncated=false
+
+# 指示文（コメント起動ではコメント、Issue 起動では本文）を先頭に置き、上限内に必ず残す。
+# コメント起動時の Issue 本文は背景情報として後ろに置き、残りの文字数に収まる分だけ含める。
 prompt="# Task: GitHub Issue #${ISSUE_NUMBER:-N/A}"$'\n\n'"## Title"$'\n'"${issue_title}"
 if [ "${EVENT_NAME:-}" = "issue_comment" ]; then
-  prompt+=$'\n\n'"## Issue description (background)"$'\n'"${issue_body}"
   prompt+=$'\n\n'"## Instruction (from comment)"$'\n'"${instruction}"
 else
   prompt+=$'\n\n'"## Description"$'\n'"${instruction}"
 fi
 
-truncated=false
 if [ "${#prompt}" -gt "$MAX_PROMPT_CHARS" ]; then
-  prompt="${prompt:0:$MAX_PROMPT_CHARS}"$'\n\n'"[... truncated ...]"
+  prompt="${prompt:0:$MAX_PROMPT_CHARS}${TRUNC_MARK}"
   truncated=true
-  echo "::warning::指示文が ${MAX_PROMPT_CHARS} 文字を超えたため切り詰めました。"
+elif [ "${EVENT_NAME:-}" = "issue_comment" ] && [ -n "$issue_body" ]; then
+  bg_header=$'\n\n'"## Issue description (background, for reference only)"$'\n'
+  remaining=$((MAX_PROMPT_CHARS - ${#prompt} - ${#bg_header}))
+  if [ "${#issue_body}" -le "$remaining" ]; then
+    prompt+="${bg_header}${issue_body}"
+  elif [ "$remaining" -gt 0 ]; then
+    prompt+="${bg_header}${issue_body:0:$remaining}${TRUNC_MARK}"
+    truncated=true
+  else
+    truncated=true
+  fi
+fi
+
+if [ "$truncated" = true ]; then
+  echo "::warning::指示文が ${MAX_PROMPT_CHARS} 文字を超えたため切り詰めました（指示部分を優先して保持）。"
 fi
 
 # ---------------------------------------------------------------------------
