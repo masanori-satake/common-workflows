@@ -1,0 +1,184 @@
+name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
+
+# =============================================================================
+# 概要 (Overview)
+# -----------------------------------------------------------------------------
+# GitHub の Issue / Issue コメントを指示文として、Aider + Gemini API（Google AI
+# Studio 無料枠）でコードを修正し、変更があれば Pull Request を作成する。
+#
+# 統一パラメータ方針 (Unified Parameters Policy)
+#   - モデル            : gemini/gemini-2.5-flash
+#   - Aider             : aider-chat をバージョン固定でインストール（Python 3.12）
+#   - 依存インストール  : package.json があれば lockfile 自動判定（npm ci / npm install）
+#   - 自動テスト        : --auto-test --test-cmd（失敗時は AI が自己修正。空なら無効）
+#   - 429 対策          : 30s → 60s → 120s の指数バックオフで最大 4 回試行
+#   - 対象ファイル指定  : 本文の "Files: a.ts, b.ts" 行を抽出（追跡済みファイルのみ）
+#   - .aiderignore      : 無ければ自動生成（node_modules/ 等をコンテキストから除外）
+#
+# セキュリティ方針 (Security Policy)
+#   - Issue 本文・コメントは ${{ }} で run: に直接埋め込まず、env 経由で受け渡す
+#     （スクリプトインジェクション対策）。$GITHUB_ENV へはランダムなデリミタで書き込む。
+#   - ボット（*[bot] / sender.type == Bot）による起動を遮断（無限ループ防止）
+#   - コメント起動は author_association が allowed_associations に含まれる場合のみ
+#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成ステップにのみ渡し、
+#     GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
+#   - Aider のシェルコマンド提案・URL 自動取得は無効化（--yes-always との組合せ対策）
+#
+# 呼び出し側の前提 (Caller Requirements)
+#   - permissions: contents: write / issues: write / pull-requests: write を付与する
+#   - リポジトリ設定 "Allow GitHub Actions to create and approve pull requests" を有効化
+#   - GITHUB_TOKEN で作成した PR では他のワークフロー（CI）は自動起動しない
+#     （GitHub の仕様）。CI を回す場合は PR を一度 close → reopen する。
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      target_branch:
+        description: '作業対象のベースブランチ（空ならリポジトリの既定ブランチ）'
+        required: false
+        type: string
+        default: ''
+      model_name:
+        description: '使用する Gemini モデル名（gemini/ プレフィックスは不要）'
+        required: false
+        type: string
+        default: 'gemini-2.5-flash'
+      test_command:
+        description: 'Aider が修正後に実行する自動テストコマンド（空なら自動テスト無効）'
+        required: false
+        type: string
+        default: 'npm test'
+      node_version:
+        description: '使用する Node.js のバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      setup_node:
+        description: 'package.json がある場合に Node.js セットアップと依存インストールを行うか'
+        required: false
+        type: boolean
+        default: true
+      aider_version:
+        description: 'インストールする aider-chat のバージョン（固定）'
+        required: false
+        type: string
+        default: '0.86.2'
+      max_retries:
+        description: '429 レートリミット時の最大試行回数'
+        required: false
+        type: number
+        default: 4
+      initial_delay:
+        description: 'リトライ初回の待機秒数（以降 2 倍ずつ増加）'
+        required: false
+        type: number
+        default: 30
+      allowed_associations:
+        description: 'コメント起動を許可する author_association（カンマ区切り・空白なし）'
+        required: false
+        type: string
+        default: 'OWNER,MEMBER,COLLABORATOR'
+      command_prefix:
+        description: 'コメント起動のコマンドプレフィックス（指示文から除去される）'
+        required: false
+        type: string
+        default: '/ai'
+      timeout_minutes:
+        description: 'ジョブのタイムアウト（分）。バックオフ待機と自己修正ループを考慮した値'
+        required: false
+        type: number
+        default: 30
+    secrets:
+      GEMINI_API_KEY:
+        description: 'Google AI Studio の API キー（無料枠用）'
+        required: true
+
+jobs:
+  run-agent:
+    name: 'Gemini AI エージェント実行 (Run Gemini AI Agent)'
+    # 無限ループ防止: ボット自身のイベントでは起動しない。
+    # PR 上のコメント（issue_comment は PR でも発火する）は対象外。
+    # コメント起動は信頼できる author_association に限定する（シークレット悪用防止）。
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      !endsWith(github.actor, '[bot]') &&
+      github.event.sender.type != 'Bot' &&
+      (github.event_name == 'issues' ||
+        (github.event_name == 'issue_comment' &&
+          !github.event.issue.pull_request &&
+          contains(format(',{0},', inputs.allowed_associations), format(',{0},', github.event.comment.author_association))))
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    # 多重実行防止: 同一 Issue（Issue イベントは常に既定ブランチ上で動くため、
+    # ブランチ単位ではなく Issue 単位で直列化する）。実行中のジョブはキャンセルしない。
+    # 呼び出し側と同名のグループを使うとデッドロックするため、固有のプレフィックスを付ける。
+    concurrency:
+      group: gemini-ai-agent-${{ github.repository }}-${{ github.event.issue.number || github.ref }}
+      cancel-in-progress: false
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Repository)'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target_branch || github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: 'lockfile の有無を判定 (Detect Node Project)'
+        id: node_project
+        run: |
+          if [ ! -f package.json ]; then
+            echo "kind=none" >> "$GITHUB_OUTPUT"
+          elif [ -f package-lock.json ]; then
+            echo "kind=lockfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=no-lockfile" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+        if: ${{ inputs.setup_node && steps.node_project.outputs.kind != 'none' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ steps.node_project.outputs.kind == 'lockfile' && 'npm' || '' }}
+
+      - name: '依存関係のインストール (Install Dependencies)'
+        if: ${{ inputs.setup_node && steps.node_project.outputs.kind != 'none' }}
+        env:
+          NODE_PROJECT_KIND: ${{ steps.node_project.outputs.kind }}
+        run: |
+          if [ "$NODE_PROJECT_KIND" = "lockfile" ]; then
+            npm ci
+          else
+            echo "package-lock.json が存在しないため npm install を使用します。"
+            npm install
+          fi
+
+      - name: 'Gemini AI エージェントの実行 (Run Aider Agent & Create PR)'
+        id: agent
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent@v1
+        with:
+          base_branch: ${{ inputs.target_branch || github.event.repository.default_branch }}
+          model_name: ${{ inputs.model_name }}
+          test_command: ${{ inputs.test_command }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          command_prefix: ${{ inputs.command_prefix }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: '失敗時の Issue 通知 (Notify Failure on Issue)'
+        if: ${{ failure() && github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "⚠️ Gemini AI エージェントの実行に失敗しました。詳細は [実行ログ]($RUN_URL) を確認してください。"

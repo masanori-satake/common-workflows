@@ -1,0 +1,134 @@
+name: 'Gemini AI エージェント (Gemini AI Agent)'
+description: 'Issue / コメントの指示文を Aider + Gemini API で実行し、変更があれば PR を作成する共通 composite action。429 の指数バックオフ再試行と自動テストによる自己修正を含む。'
+
+inputs:
+  base_branch:
+    description: 'PR のベースブランチ'
+    required: true
+  model_name:
+    description: 'Gemini モデル名（gemini/ プレフィックスは不要）'
+    required: false
+    default: 'gemini-2.5-flash'
+  test_command:
+    description: 'Aider の自動テストコマンド（空なら自動テスト無効）'
+    required: false
+    default: ''
+  aider_version:
+    description: 'aider-chat のバージョン（固定）'
+    required: false
+    default: '0.86.2'
+  python_version:
+    description: 'Aider 実行に使う Python のバージョン（aider-chat は 3.10〜3.12 対応）'
+    required: false
+    default: '3.12'
+  max_retries:
+    description: '429 レートリミット時の最大試行回数'
+    required: false
+    default: '4'
+  initial_delay:
+    description: 'リトライ初回の待機秒数（以降 2 倍ずつ増加）'
+    required: false
+    default: '30'
+  command_prefix:
+    description: 'コメント起動のコマンドプレフィックス（指示文から除去される）'
+    required: false
+    default: '/ai'
+  max_prompt_chars:
+    description: '指示文の最大文字数（超過分は切り捨て。トークン節約と引数長制限対策）'
+    required: false
+    default: '20000'
+  max_target_files:
+    description: 'Files: 指定で受け付ける最大ファイル数'
+    required: false
+    default: '20'
+  gemini_api_key:
+    description: 'Google AI Studio の API キー'
+    required: true
+  github_token:
+    description: 'push / PR 作成 / Issue コメント用トークン'
+    required: true
+
+outputs:
+  agent_status:
+    description: 'Aider の実行結果（success / failed）'
+    value: ${{ steps.aider.outputs.agent_status }}
+  test_status:
+    description: '最終テスト結果（passed / failed / skipped）'
+    value: ${{ steps.aider.outputs.test_status }}
+  pr_url:
+    description: '作成した PR の URL（変更なしの場合は空）'
+    value: ${{ steps.pr.outputs.pr_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Python環境のセットアップ (Setup Python)'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: 'Aider のインストール (Install Aider)'
+      shell: bash
+      env:
+        AIDER_VERSION: ${{ inputs.aider_version }}
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "aider-chat==${AIDER_VERSION}"
+        aider --version
+
+    - name: 'Git 作成者の設定 (Configure Git Author)'
+      shell: bash
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: '.aiderignore の確認・自動生成 (Ensure .aiderignore Exists)'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/ensure_aiderignore.sh"
+
+    - name: '指示文と対象ファイルの抽出 (Extract Prompt and Target Files)'
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        ISSUE_TITLE: ${{ github.event.issue.title }}
+        ISSUE_BODY: ${{ github.event.issue.body }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        COMMAND_PREFIX: ${{ inputs.command_prefix }}
+        MAX_PROMPT_CHARS: ${{ inputs.max_prompt_chars }}
+        MAX_TARGET_FILES: ${{ inputs.max_target_files }}
+      run: bash "$GITHUB_ACTION_PATH/extract_request.sh"
+
+    - name: 'Aider の実行（対象限定・自動リトライ・自己修正） (Run Aider with Retry & Self-Healing)'
+      id: aider
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        MODEL_NAME: ${{ inputs.model_name }}
+        TEST_COMMAND: ${{ inputs.test_command }}
+        MAX_RETRIES: ${{ inputs.max_retries }}
+        INITIAL_DELAY: ${{ inputs.initial_delay }}
+      run: bash "$GITHUB_ACTION_PATH/run_aider.sh"
+
+    - name: 'Aider ログの保存 (Upload Aider Logs)'
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: aider-logs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/aider/
+        retention-days: 7
+        if-no-files-found: ignore
+
+    - name: '変更があれば PR を作成 (Create Pull Request if Changes Exist)'
+      id: pr
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        BASE_BRANCH: ${{ inputs.base_branch }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        MODEL_NAME: ${{ inputs.model_name }}
+        TEST_COMMAND: ${{ inputs.test_command }}
+        TEST_STATUS: ${{ steps.aider.outputs.test_status }}
+        ATTEMPTS: ${{ steps.aider.outputs.attempts }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: bash "$GITHUB_ACTION_PATH/create_pr.sh"

@@ -424,3 +424,47 @@ jobs:
 各プロジェクトは build スクリプトから ZIP 生成ロジックを取り除き、`package_source_dir` を
 指定する形へ移行する。これにより ZIP 名がリポジトリ名ベースに統一され、`package.json` の
 `name`（小文字慣例）に依存しなくなる。
+
+---
+
+## 15. Gemini AI エージェント (Gemini AI Agent)
+
+GitHub の Issue / コメントを指示文として、Aider + Gemini API（Google AI Studio 無料枠）で
+コードを修正し、変更があれば PR を作成する仕組みを共通化する。
+
+### 15.1 構成
+
+- 共通ワークフロー: `masanori-satake/common-workflows/.github/workflows/gemini-ai-agent-template.yml@v1`
+  （起動ガード・チェックアウト・Node.js 依存インストール・失敗通知）
+- 共通 composite action: `.github/actions/gemini-ai-agent`（処理本体。スクリプトは同ディレクトリに分離）
+  - `ensure_aiderignore.sh` — `.aiderignore` が無ければ既定の除外リストを生成
+  - `extract_request.sh` — 指示文と `Files:` 指定を抽出し、`$GITHUB_ENV` へランダムデリミタで書き出す
+  - `run_aider.sh` — 429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）と `--auto-test` による自己修正
+  - `create_pr.sh` — 変更があればブランチ `chore/ai-issue-<番号>-<run_id>` に commit・push し PR 作成
+- 呼び出し側テンプレート: `templates/<種別>/.github/workflows/ai-coder-trigger.yml`
+
+### 15.2 使い方
+
+- Issue に `ai-task` ラベルを付与する、または `/ai <指示>` で始まるコメントを投稿する。
+- 本文に `Files: src/a.ts, src/b.ts` 行を書くと、そのファイルのみを AI に渡し、
+  リポジトリマップも無効化してトークン消費を抑える。Git 追跡済みファイルのみ受け付ける。
+- 最終テストが失敗した場合は Draft PR になる。
+
+### 15.3 事前準備
+
+1. リポジトリ Secrets に `GEMINI_API_KEY` を登録する。
+2. Settings > Actions > General で「Allow GitHub Actions to create and approve pull requests」を有効化する。
+3. 呼び出し側ジョブに `contents: write` / `issues: write` / `pull-requests: write` を付与する。
+
+### 15.4 セキュリティと制約
+
+- コメント起動は `author_association` が `OWNER` / `MEMBER` / `COLLABORATOR` の場合のみ。
+  PR 上のコメントとボットのイベントは無視する（無限ループ防止）。
+- Issue 本文は `env:` 経由で受け渡し、`run:` に `${{ }}` で直接埋め込まない。
+- `--yes-always` と組み合わせて危険なため、Aider のシェルコマンド提案と URL 自動取得は無効化している。
+- `.aider*`（自動生成した `.aiderignore` を含む）と `.github/workflows/` はコミットしない
+  （`GITHUB_TOKEN` ではワークフローファイルを push できない）。
+- `GITHUB_TOKEN` で作成した PR では CI が自動起動しない（GitHub の仕様）。PR を Close → Reopen して起動する。
+- 呼び出し側にワークフロー単位の `concurrency` を置かない（例外）。`/ai` 以外のコメントで起動しスキップされる
+  実行が、待機中の正規の実行を置き換えてキャンセルしてしまうため。多重実行防止は共通ワークフロー側の
+  ジョブ単位（Issue 単位・`cancel-in-progress: false`）で行う。
