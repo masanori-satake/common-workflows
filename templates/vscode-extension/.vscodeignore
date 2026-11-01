@@ -1,0 +1,45 @@
+# VSIX パッケージから除外するファイル (Files excluded from the VSIX package)
+# 拡張機能の実行に必要なもの（ビルド成果物、package.json、README、CHANGELOG、LICENSE、
+# アイコン、l10n など）だけを同梱する。プロジェクトに合わせて追記・調整すること。
+# 同梱内容は `npx vsce ls` で確認できる。
+
+# 開発環境・テスト (Development & test)
+.vscode/**
+.vscode-test/**
+**/.vscode-test.*
+__tests__/**
+out/test/**
+coverage/**
+
+# ソース・ビルド設定 (Sources & build config)
+src/**
+**/*.map
+**/*.ts
+**/tsconfig.json
+**/eslint.config.mjs
+.eslintrc.*
+esbuild.js
+pnpm-lock.yaml
+vsc-extension-quickstart.md
+# ★ esbuild 等でバンドルし dist/ を出力する場合は、以下のコメントを外す
+# out/**
+# node_modules/**
+
+# CI・リポジトリ管理 (CI & repository management)
+.git/**
+.github/**
+.gitignore
+.editorconfig
+.pre-commit-config.yaml
+.pre-commit-ci.yaml
+scripts/**
+docs/**
+*.vsix
+
+# AI エージェント・ツール関連 (AI agent & tool files)
+AGENTS.md
+.agents/**
+.jules/**
+.kilo/**
+.kiro/**
+.codiumai.toml

@@ -20,11 +20,16 @@
    プロジェクト固有の VSIX ファイル名プレフィックスに書き換えます。
    詳細は `scripts/README.md` を参照してください。
 
-4. リポジトリのシークレットに以下を設定します:
+4. `.vscodeignore` をビルド方式に合わせて調整します。esbuild 等でバンドルして
+   `dist/` を出力する場合は、`out/**` と `node_modules/**` の除外を有効にします。
+   `npx vsce ls` で VSIX に同梱されるファイルを確認し、拡張機能の実行に不要な
+   ファイルが含まれていないことを確かめてください。
+
+5. リポジトリのシークレットに以下を設定します:
    - `VSCE_PAT` — Visual Studio Marketplace 公開用 PAT
    - `OVSX_PAT` — Open VSX Registry 公開用 PAT
 
-5. `common-workflows` リポジトリの `v1` タグが最新 commit を指していることを
+6. `common-workflows` リポジトリの `v1` タグが最新 commit を指していることを
    確認してください（タグの移動はユーザーが手動で行います）。
 
 ## 含まれるファイル
@@ -34,6 +39,7 @@
 | `.github/workflows/code-quality.yml` | CI 呼出: `base-ci-vscode.yml@v1`（push / PR / 手動） |
 | `.github/workflows/release-package.yml` | リリース呼出: `base-release-vscode.yml@v1`（main から手動） |
 | `.github/workflows/security-scan.yml` | セキュリティスキャン呼出: `base-security.yml@v1`（push / PR / 定期） |
+| `.github/osv-scanner.toml` | OSV-Scanner 設定（devDependencies の脆弱性を合否判定から除外） |
 | `scripts/check-version.js` | 版整合性 ＋ 版バンプ検査（正本テンプレート・編集不要） |
 | `scripts/update-version.js` | 版一括更新（★ VSIX ファイル名正規表現を編集） |
 | `scripts/run-pre-commit-check.sh` | pre-commit フック用エントリ（正本テンプレート・編集不要） |
@@ -42,7 +48,8 @@
 | `package.json` | スターター用 npm scripts 定義 |
 | `tsconfig.json` | strict モード TypeScript 設定 |
 | `.editorconfig` | エディタ設定（スペース2・LF・UTF-8） |
-| `.gitignore` | 無視対象定義（node_modules / dist / out / *.vsix 等） |
+| `.gitignore` | 無視対象定義（node_modules / dist / out / *.vsix / .agents 等） |
+| `.vscodeignore` | VSIX から除外するファイルの定義（★ ビルド方式に合わせて調整） |
 
 ## ワークフローの動作
 
