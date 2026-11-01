@@ -97,4 +97,6 @@ echo "PR を作成しました: ${pr_url}"
 echo "pr_url=${pr_url}" >> "$GITHUB_OUTPUT"
 echo "✅ PR を作成しました (Pull Request created): ${pr_url}" >> "$GITHUB_STEP_SUMMARY"
 
-comment_issue "🤖 Gemini AI エージェントが PR を作成しました: ${pr_url}（自動テスト: ${test_line}）"
+# URL の直後に全角文字を続けると GitHub の自動リンクが URL の一部として取り込むため、
+# URL は行末に置く。状況コメントの書き換えでは通知が飛ばないため、結果はこのコメントで通知する。
+comment_issue "🤖 Gemini AI エージェントが PR を作成しました。"$'\n\n'"- PR: ${pr_url}"$'\n'"- 自動テスト: ${test_line}"
