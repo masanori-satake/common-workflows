@@ -452,6 +452,8 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 
 ### 15.3 事前準備
 
+テンプレート利用者向けの Web 画面での詳細手順は [Gemini AI エージェント導入ガイド](./ai-agent-setup.md) を参照する。
+
 1. リポジトリ Secrets に `GEMINI_API_KEY` を登録する。
 2. Settings > Actions > General で「Allow GitHub Actions to create and approve pull requests」を有効化する。
 3. 呼び出し側ジョブに `contents: write` / `issues: write` / `pull-requests: write` を付与する。

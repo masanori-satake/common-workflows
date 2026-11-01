@@ -32,6 +32,11 @@
 6. `common-workflows` リポジトリの `v1` タグが最新 commit を指していることを
    確認してください（タグの移動はユーザーが手動で行います）。
 
+7. （任意）Gemini AI エージェントを使う場合は、
+   [Gemini AI エージェント導入ガイド](https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md)
+   に従って `GEMINI_API_KEY` シークレット・`ai-task` ラベル・Actions の PR 作成許可を設定します。
+   使わない場合は `.github/workflows/ai-coder-trigger.yml` を削除してください。
+
 ## 含まれるファイル
 
 | パス | 役割 |
@@ -39,6 +44,7 @@
 | `.github/workflows/code-quality.yml` | CI 呼出: `base-ci-vscode.yml@v1`（push / PR / 手動） |
 | `.github/workflows/release-package.yml` | リリース呼出: `base-release-vscode.yml@v1`（main から手動） |
 | `.github/workflows/security-scan.yml` | セキュリティスキャン呼出: `base-security.yml@v1`（push / PR / 定期） |
+| `.github/workflows/ai-coder-trigger.yml` | AI エージェント呼出: `gemini-ai-agent-template.yml@v1`（Issue ラベル / `/ai` コメント） |
 | `.github/osv-scanner.toml` | OSV-Scanner 設定（devDependencies の脆弱性を合否判定から除外） |
 | `scripts/check-version.js` | 版整合性 ＋ 版バンプ検査（正本テンプレート・編集不要） |
 | `scripts/update-version.js` | 版一括更新（★ VSIX ファイル名正規表現を編集） |
@@ -59,3 +65,5 @@
   で VSIX 生成 → Marketplace 公開 → Open VSX 公開 → GitHub Release 作成を行います。
 - **セキュリティスキャン (security-scan.yml):** push / PR / 定期実行で
   npm audit と OSV-Scanner を実行します。
+- **AI エージェント (ai-coder-trigger.yml):** Issue への `ai-task` ラベル付与または
+  `/ai` コメントで、Aider + Gemini API がコードを修正し PR を作成します。

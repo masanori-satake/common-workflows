@@ -5,7 +5,9 @@ name: 'Gemini AI コーダー起動 (Trigger Gemini AI Coder)'
 #   - Issue に `/ai <指示>` で始まるコメントを投稿する（OWNER / MEMBER / COLLABORATOR のみ）
 #   - 本文に `Files: src/a.ts, src/b.ts` 行を書くと、そのファイルだけを AI に渡す
 #
-# 事前準備 (Setup):
+# 事前準備 (Setup): Web 画面での詳細手順は導入ガイドを参照
+#   https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md
+#   - Issues > Labels で `ai-task` ラベルを作成する
 #   - リポジトリの Secrets に GEMINI_API_KEY（Google AI Studio の API キー）を登録する
 #   - Settings > Actions > General で "Allow GitHub Actions to create and approve pull requests" を有効化する
 #
