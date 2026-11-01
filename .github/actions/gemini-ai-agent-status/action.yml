@@ -1,0 +1,58 @@
+name: 'Gemini AI エージェント状況表示 (Gemini AI Agent Status)'
+description: 'Gemini AI エージェントの処理状況を Issue 上に表示する共通 composite action。起動元へのリアクションと、段階ごとに書き換える状況コメントを扱う。失敗してもジョブは失敗させない。'
+
+inputs:
+  mode:
+    description: 'ack（受付）/ finish（完了）'
+    required: true
+  github_token:
+    description: 'Issue コメント・リアクション用トークン（issues: write）'
+    required: true
+  status_comment_id:
+    description: '状況コメントの ID（finish 時。ack の出力を渡す）'
+    required: false
+    default: ''
+  reaction_id:
+    description: '受付時の 👀 リアクション ID（finish 時に外す）'
+    required: false
+    default: ''
+  result:
+    description: 'finish 時の結果（pr / nochange / failure / cancelled）'
+    required: false
+    default: 'failure'
+  pr_url:
+    description: 'finish 時に表示する PR の URL'
+    required: false
+    default: ''
+
+outputs:
+  comment_id:
+    description: '作成した状況コメントの ID（ack 時）'
+    value: ${{ steps.status.outputs.comment_id }}
+  reaction_id:
+    description: '付与した 👀 リアクションの ID（ack 時）'
+    value: ${{ steps.status.outputs.reaction_id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Issue 上の状況表示 (Update Status on Issue)'
+      id: status
+      shell: bash
+      env:
+        STATUS_GH_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        EVENT_NAME: ${{ github.event_name }}
+        TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        REACTION_ID: ${{ inputs.reaction_id }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        MODE: ${{ inputs.mode }}
+        RESULT: ${{ inputs.result }}
+        PR_URL: ${{ inputs.pr_url }}
+      run: |
+        if [ "$MODE" = "finish" ]; then
+          bash "$GITHUB_ACTION_PATH/status_comment.sh" finish "$RESULT" "$PR_URL"
+        else
+          bash "$GITHUB_ACTION_PATH/status_comment.sh" "$MODE"
+        fi

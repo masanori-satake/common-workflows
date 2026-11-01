@@ -4,6 +4,9 @@
 #   - TEST_COMMAND 指定時は --auto-test で修正後にテストを実行し、失敗時は AI が自己修正
 #   - TARGET_FILES 指定時はそのファイルのみをコンテキストに渡し、リポジトリマップを無効化
 #
+# GitHub トークンはこのスクリプトに渡さない（Aider・テストと同じプロセスツリーに置かない）。
+# Issue 上の状況更新は action.yml の前後の専用ステップで行う。
+#
 # 入力（env）: AI_PROMPT, TARGET_FILES, GEMINI_API_KEY, MODEL_NAME, TEST_COMMAND,
 #              MAX_RETRIES, INITIAL_DELAY
 # 出力（$GITHUB_OUTPUT）: agent_status, test_status, attempts

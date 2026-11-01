@@ -6,7 +6,8 @@
 #   - 最終テストが失敗した場合は Draft PR として作成する
 #
 # 入力（env）: GH_TOKEN, BASE_BRANCH, ISSUE_NUMBER, MODEL_NAME, TEST_COMMAND,
-#              TEST_STATUS, ATTEMPTS, TARGET_FILES, RUN_URL, GITHUB_RUN_ID
+#              TEST_STATUS, ATTEMPTS, TARGET_FILES, RUN_URL, GITHUB_RUN_ID,
+#              STATUS_SCRIPT, STATUS_COMMENT_ID（状況表示用・任意）
 # 出力（$GITHUB_OUTPUT）: pr_url
 set -euo pipefail
 
@@ -28,6 +29,10 @@ if [ -z "$(git status --porcelain "${PATHSPEC[@]}")" ]; then
   echo "pr_url=" >> "$GITHUB_OUTPUT"
   comment_issue "ℹ️ Gemini AI エージェントを実行しましたが、変更はありませんでした。[実行ログ](${RUN_URL})"
   exit 0
+fi
+
+if [ -n "${STATUS_SCRIPT:-}" ] && [ -f "$STATUS_SCRIPT" ]; then
+  bash "$STATUS_SCRIPT" update "📤 PR を作成中" "変更をブランチに push し、Pull Request を作成しています。" || true
 fi
 
 skipped_workflows="$(git status --porcelain -- .github/workflows || true)"
