@@ -26,3 +26,4 @@ jobs:
     #   run_lint: false             # Lint 未設定の場合
     #   run_test: false             # テスト未設定の場合
     #   run_build: false            # ビルド未設定の場合
+    #   run_package_check: false    # VSIX パッケージング検証をスキップする場合

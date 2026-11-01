@@ -114,6 +114,8 @@ concurrency:
   cancel-in-progress: true
 ```
 
+   - ただし、外部レジストリへの公開を伴うリリースワークフロー（例: VSCode 拡張機能の `release-package.yml`）では、公開途中のキャンセルによる部分公開を防ぐため `cancel-in-progress: false` とし、実行を直列化します。
+
 ---
 
 ## 8. プラットフォーム別考慮事項 (Platform Guidelines)

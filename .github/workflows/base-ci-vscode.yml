@@ -9,6 +9,7 @@ name: 'VSCode拡張機能CI (Base CI for VSCode Extension)'
 #   - Lint              : npm run lint --if-present
 #   - Test              : xvfb-run --auto-servernum npm test（VSCode 拡張機能テストに必須）
 #   - Build             : npm run build --if-present（tsc / esbuild 両方式を吸収）
+#   - Package Check     : npx @vscode/vsce package（VSIX 生成可否を PR 時点で検証）
 #
 # 既有 base-ci.yml（Chrome 向け）との差異:
 #   - Python セットアップ不要
@@ -41,6 +42,11 @@ on:
         default: true
       run_build:
         description: 'ビルドを実行するか'
+        required: false
+        type: boolean
+        default: true
+      run_package_check:
+        description: 'VSIXパッケージングを検証するか（vsce package を実行し、成果物は破棄）'
         required: false
         type: boolean
         default: true
@@ -87,3 +93,9 @@ jobs:
       - name: 'ビルドの実行 (Build)'
         if: ${{ inputs.run_build }}
         run: npm run build --if-present
+
+      # .vscodeignore や package.json マニフェストの不備をリリース前（PR 時点）に検出する。
+      # 生成した VSIX は検証専用のため一時ディレクトリへ出力し、アップロードはしない。
+      - name: 'VSIXパッケージングの検証 (Verify VSIX Packaging)'
+        if: ${{ inputs.run_package_check }}
+        run: npx @vscode/vsce package --no-git-tag-version --out "$RUNNER_TEMP/package-check.vsix"

@@ -5,6 +5,8 @@ name: 'VSCode拡張機能リリース (Base Release for VSCode Extension)'
 # -----------------------------------------------------------------------------
 #   - Node.js           : lts/*
 #   - 依存インストール  : npm ci       （package-lock.json 前提・再現性重視）
+#   - 公開前テスト      : xvfb-run --auto-servernum npm test（失敗時は公開しない）
+#   - 同時実行制御      : ジョブ単位で直列化し、実行中のリリースはキャンセルしない
 #   - VSIX 生成         : npx @vscode/vsce package --no-git-tag-version
 #                         CI の成果物を引き継がず、リリースジョブ内で再生成する
 #                         （同一 commit から同一 VSIX が得られる）
@@ -47,6 +49,11 @@ on:
         required: false
         type: boolean
         default: true
+      run_test:
+        description: '公開前に単体テストを実行するか（xvfb-run でラップ。失敗時は公開しない）'
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   release:
@@ -55,6 +62,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    # 公開処理の途中キャンセルで「Marketplace のみ公開済み」等の部分公開状態になるのを防ぐ。
+    # 同一リポジトリのリリースは直列化し、実行中のものはキャンセルしない。
+    concurrency:
+      group: release-vscode-${{ github.repository }}
+      cancel-in-progress: false
 
     steps:
       - name: 'コードのチェックアウト (Checkout Code)'
@@ -70,6 +82,11 @@ jobs:
 
       - name: '依存関係のインストール (Install Dependencies)'
         run: npm ci
+
+      # 公開ゲート: テスト未通過のコミットを公開しない（旧 build-and-publish.yml の needs: build に相当）
+      - name: '公開前テストの実行 (Test before Publish, wrapped with xvfb)'
+        if: ${{ inputs.run_test }}
+        run: xvfb-run --auto-servernum npm test
 
       - name: 'VSIXパッケージの作成 (Package Extension as .vsix)'
         run: npx @vscode/vsce package --no-git-tag-version

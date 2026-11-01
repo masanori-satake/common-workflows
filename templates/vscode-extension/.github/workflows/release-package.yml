@@ -5,7 +5,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 公開途中のキャンセルによる部分公開を防ぐため、リリースはキャンセルせず直列化する
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -23,3 +24,4 @@ jobs:
     #   publish_marketplace: false      # Marketplace への公開をスキップする場合
     #   publish_ovsx: false             # Open VSX への公開をスキップする場合
     #   create_github_release: false    # GitHub Release 作成をスキップする場合
+    #   run_test: false                 # 公開前テストをスキップする場合（非推奨）
