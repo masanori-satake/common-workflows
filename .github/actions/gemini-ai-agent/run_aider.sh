@@ -15,7 +15,7 @@ if [ -z "${GEMINI_API_KEY:-}" ]; then
   exit 1
 fi
 
-MODEL_NAME="${MODEL_NAME:-gemini-2.5-flash}"
+MODEL_NAME="${MODEL_NAME:-gemini-3.8-flash}"
 MAX_RETRIES="${MAX_RETRIES:-4}"
 DELAY="${INITIAL_DELAY:-30}"
 WORK_DIR="${RUNNER_TEMP:-/tmp}/aider"
@@ -33,8 +33,27 @@ FATAL_PATTERN='litellm\.(AuthenticationError|PermissionDeniedError|NotFoundError
 
 read -r -a FILES <<< "${TARGET_FILES:-}"
 
+if [[ ! "$MODEL_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "::error::model_name に使用できない文字が含まれています: ${MODEL_NAME}"
+  exit 1
+fi
+
+# Aider に既定設定が無い新しいモデルでも適切に動くよう、モデル設定を明示する。
+#   - edit_format: diff-fenced（Gemini 向けの差分形式。未知モデル既定の whole は毎回
+#     ファイル全体を送受信するため無料枠のトークンを浪費する）
+#   - use_temperature: false（temperature を送らず API 既定値を使う。Gemini 3 系は
+#     既定値以外の temperature で応答品質が低下し得る）
+MODEL_SETTINGS_FILE="${WORK_DIR}/model-settings.yml"
+cat > "$MODEL_SETTINGS_FILE" <<EOF
+- name: gemini/${MODEL_NAME}
+  edit_format: diff-fenced
+  use_repo_map: true
+  use_temperature: false
+EOF
+
 ARGS=(
   --model "gemini/${MODEL_NAME}"
+  --model-settings-file "$MODEL_SETTINGS_FILE"
   --yes-always
   --no-auto-commits
   --no-dirty-commits
@@ -53,8 +72,13 @@ ARGS=(
   --input-history-file "${WORK_DIR}/input-history.txt"
   --message-file "$PROMPT_FILE"
 )
+TEST_SCRIPT="${WORK_DIR}/run_tests.sh"
 if [ -n "${TEST_COMMAND:-}" ]; then
-  ARGS+=(--auto-test --test-cmd "$TEST_COMMAND")
+  # テストはリポジトリのコード（AI が編集し得る）を実行するため、API キーを渡さない。
+  # Aider の自動テスト subprocess は Aider の環境変数を継承するので、ラッパー経由で除去する。
+  # TEST_COMMAND をスクリプトファイルに書き出すことで、引数のクォート問題も避ける。
+  printf '%s\n' "$TEST_COMMAND" > "$TEST_SCRIPT"
+  ARGS+=(--auto-test --test-cmd "env -u GEMINI_API_KEY bash $(printf '%q' "$TEST_SCRIPT")")
 fi
 if [ "${#FILES[@]}" -gt 0 ]; then
   # 対象ファイル指定時はリポジトリマップを送らずトークン消費を抑える
@@ -113,7 +137,7 @@ done
 test_status="skipped"
 if [ "$agent_status" = "success" ] && [ -n "${TEST_COMMAND:-}" ]; then
   echo "::group::最終テストの実行 (Final Test Run)"
-  if env -u GEMINI_API_KEY bash -c "$TEST_COMMAND" > "${WORK_DIR}/final_test.log" 2>&1; then
+  if env -u GEMINI_API_KEY bash "$TEST_SCRIPT" > "${WORK_DIR}/final_test.log" 2>&1; then
     test_status="passed"
   else
     test_status="failed"

@@ -469,4 +469,7 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 - `GITHUB_TOKEN` で作成した PR では CI が自動起動しない（GitHub の仕様）。PR を Close → Reopen して起動する。
 - 呼び出し側にワークフロー単位の `concurrency` を置かない（例外）。`/ai` 以外のコメントで起動しスキップされる
   実行が、待機中の正規の実行を置き換えてキャンセルしてしまうため。多重実行防止は共通ワークフロー側の
-  ジョブ単位（Issue 単位・`cancel-in-progress: false`）で行う。
+  ジョブ単位（Issue 単位・`cancel-in-progress: false`・`queue: max`）で行う。`queue: max` により、
+  同一 Issue への連続したリクエストもキャンセルされず順番に処理される。
+- `test_command`（Aider の自動テスト・最終テストの両方）には `GEMINI_API_KEY` を渡さない。
+- コメント起動時はコメントの指示を先頭に置き、`max_prompt_chars` を超える場合は背景情報の Issue 本文側を切り詰める。

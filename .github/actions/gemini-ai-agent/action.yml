@@ -8,7 +8,7 @@ inputs:
   model_name:
     description: 'Gemini モデル名（gemini/ プレフィックスは不要）'
     required: false
-    default: 'gemini-2.5-flash'
+    default: 'gemini-3.8-flash'
   test_command:
     description: 'Aider の自動テストコマンド（空なら自動テスト無効）'
     required: false

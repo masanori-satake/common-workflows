@@ -64,6 +64,16 @@ ai-coder-trigger.yml（あなたのリポジトリ）
 > ℹ️ **無料枠の上限**: 1 分あたり・1 日あたりのリクエスト数に上限があります。
 > 現在の上限は [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) で確認できます。
 
+### 使用するモデルが自分のキーで使えるか確認する（推奨）
+
+既定のモデルは `gemini-3.8-flash`（無料枠対象の Flash モデル）です。モデルによっては新規ユーザーへの
+提供が制限されることがあるため（例: `gemini-2.5-flash` 系は過去の利用者に限定）、導入前に確認しておくと安心です。
+
+1. [Google AI Studio](https://aistudio.google.com/) を開き、画面のモデル選択欄で **Gemini 3.8 Flash** を選びます。
+2. 「こんにちは」など短い文を送信し、応答が返ることを確認します。
+3. モデル選択欄に表示されない・エラーになる場合は、表示されている Flash 系モデルの
+   モデル ID（例: `gemini-3.6-flash`）を控え、[カスタマイズ](#6-カスタマイズ) の `model_name` で指定します。
+
 ---
 
 ## 3. リポジトリの設定（4 ステップ）
@@ -249,7 +259,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 
 | 入力 | 既定値 | 説明 |
 | :--- | :--- | :--- |
-| `model_name` | `gemini-2.5-flash` | 使用する Gemini モデル |
+| `model_name` | `gemini-3.8-flash` | 使用する Gemini モデル |
 | `test_command` | `npm test` | 修正後に実行するテスト。空文字 `''` で自動テスト無効（VS Code テンプレートは `xvfb-run --auto-servernum npm test`） |
 | `target_branch` | リポジトリの既定ブランチ | 作業のベースブランチ |
 | `max_retries` | `4` | 429 発生時の最大試行回数 |
@@ -296,7 +306,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | 実行はあるがジョブが「Skipped」 | ラベル名が `ai-task` でない / コメントが `/ai` で始まっていない / 権限のないユーザーのコメント / PR 上のコメント |
 | `GEMINI_API_KEY が未設定です` | [ステップ 1](#ステップ-1-シークレット-gemini_api_key-を登録する) の名前の誤り（大文字・完全一致） |
 | `AuthenticationError` / `API key not valid` | API キーの誤り・削除済み。キーを再発行し、シークレットを Update で上書き |
-| `NotFoundError` | `model_name` の誤り。利用可能なモデル名を確認 |
+| `NotFoundError` / `no longer available to new users` | `model_name` の誤り、またはそのモデルが新規ユーザーに提供されていない。[モデルの確認](#使用するモデルが自分のキーで使えるか確認する推奨) の手順で使えるモデルを選び、`model_name` で指定 |
 | 4 回リトライしても 429 で失敗 | 1 日あたりの上限に到達した可能性。リセット（太平洋時間 0 時 = 日本時間 16〜17 時）後に `/ai` コメントで再実行 |
 | PR 作成で 403 エラー | [ステップ 3](#ステップ-3-github-actions-に-pr-作成を許可する) のチェックが入っていない |
 | PR が Draft で作成された | AI 修正後の最終テストが失敗。PR 本文とジョブログのテスト結果を確認 |
