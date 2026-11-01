@@ -20,12 +20,12 @@ name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
 #     （スクリプトインジェクション対策）。$GITHUB_ENV へはランダムなデリミタで書き込む。
 #   - ボット（*[bot] / sender.type == Bot）による起動を遮断（無限ループ防止）
 #   - コメント起動は author_association が allowed_associations に含まれる場合のみ
-#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成・状況表示にのみ使い、
-#     Aider とテストの子プロセスには渡さない。GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
+#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成・状況表示の専用ステップに
+#     のみ渡し、Aider 実行ステップ（テストを含む）には渡さない。GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
 #
 # 状況表示 (Status Display)
 #   - acknowledge ジョブが順番待ちの外で即座に 👀 リアクションと状況コメントを投稿
-#   - 状況コメントは 1 件を段階ごとに書き換える（準備中 → 作業中 → 429 待機 → テスト → PR 作成）
+#   - 状況コメントは 1 件を段階ごとに書き換える（準備中 → 作業中 → 作業完了 → PR 作成）
 #   - 完了時に 👀 を 🚀（成功）/ 😕（失敗・中断）へ切り替え、結果は通知のため新規コメントでも知らせる
 #   - Aider のシェルコマンド提案・URL 自動取得は無効化（--yes-always との組合せ対策）
 #

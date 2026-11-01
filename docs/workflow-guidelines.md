@@ -443,7 +443,8 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   - `create_pr.sh` — 変更があればブランチ `chore/ai-issue-<番号>-<run_id>` に commit・push し PR 作成
 - 状況表示 composite action: `.github/actions/gemini-ai-agent-status`（`status_comment.sh`）
   - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿
-  - 状況コメント 1 件を段階ごとに書き換え（準備中 → 作業中 → 429 待機 → 最終テスト → PR 作成 → 完了）
+  - 状況コメント 1 件を段階ごとに書き換え（準備中 → 作業中 → 作業完了（試行回数・テスト結果）→ PR 作成 → 完了）
+  - 状況更新は Aider 実行ステップの前後の専用ステップでのみ行う（Aider 実行中の 429 待機などはリアルタイム表示しない）
   - 完了時に 👀 を 🚀 / 😕 に切り替え。書き換えでは通知が飛ばないため、結果は新規コメントでも知らせる
   - 補助機能のため、API エラーが起きても本体の処理は失敗させない
 - 呼び出し側テンプレート: `templates/<種別>/.github/workflows/ai-coder-trigger.yml`
@@ -465,7 +466,8 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 
 ### 15.4 セキュリティと制約
 
-- 状況表示に使う `GITHUB_TOKEN` は、Aider とテストの子プロセスの環境変数から除去する。
+- `GITHUB_TOKEN` は Aider 実行ステップに渡さない。同じプロセスツリー内のテストコードは、`unset` 後でも
+  親プロセスの `/proc/<pid>/environ` から読み取れるため、状況更新は前後の専用ステップに分離している。
 - コメント起動は `author_association` が `OWNER` / `MEMBER` / `COLLABORATOR` の場合のみ。
   PR 上のコメントとボットのイベントは無視する（無限ループ防止）。
 - Issue 本文は `env:` 経由で受け渡し、`run:` に `${{ }}` で直接埋め込まない。
