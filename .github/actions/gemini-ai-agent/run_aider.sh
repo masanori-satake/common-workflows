@@ -4,10 +4,25 @@
 #   - TEST_COMMAND 指定時は --auto-test で修正後にテストを実行し、失敗時は AI が自己修正
 #   - TARGET_FILES 指定時はそのファイルのみをコンテキストに渡し、リポジトリマップを無効化
 #
+#   - STATUS_SCRIPT 指定時は Issue 上の状況コメントを段階ごとに更新
+#
 # 入力（env）: AI_PROMPT, TARGET_FILES, GEMINI_API_KEY, MODEL_NAME, TEST_COMMAND,
-#              MAX_RETRIES, INITIAL_DELAY
+#              MAX_RETRIES, INITIAL_DELAY,
+#              STATUS_SCRIPT, STATUS_GH_TOKEN, STATUS_COMMENT_ID, ISSUE_NUMBER, RUN_URL（状況表示用・任意）
 # 出力（$GITHUB_OUTPUT）: agent_status, test_status, attempts
 set -euo pipefail
+
+# 状況表示用トークンは非 export のシェル変数へ退避し、環境変数からは除去する。
+# Aider と（AI が編集し得る）テストコードの子プロセスに GitHub トークンを渡さないため。
+_STATUS_TOKEN="${STATUS_GH_TOKEN:-}"
+unset STATUS_GH_TOKEN GH_TOKEN GITHUB_TOKEN
+
+# Issue 上の状況コメントを更新する（失敗しても処理は継続）
+status() {
+  if [ -n "${STATUS_SCRIPT:-}" ] && [ -f "$STATUS_SCRIPT" ] && [ -n "$_STATUS_TOKEN" ]; then
+    STATUS_GH_TOKEN="$_STATUS_TOKEN" bash "$STATUS_SCRIPT" update "$@" || true
+  fi
+}
 
 : "${AI_PROMPT:?AI_PROMPT が未設定です（extract_request.sh が先に実行されている必要があります）}"
 if [ -z "${GEMINI_API_KEY:-}" ]; then
@@ -94,9 +109,19 @@ reset_worktree() {
 
 echo "対象ファイル (Target files): ${FILES[*]+"${FILES[*]}"}"
 
+if [ "${#FILES[@]}" -gt 0 ]; then
+  work_detail="対象ファイル: \`${FILES[*]}\`"
+else
+  work_detail="対象ファイル: 指定なし（リポジトリ構造から AI が判断）"
+fi
+if [ -n "${TEST_COMMAND:-}" ]; then
+  work_detail+=$'\n'"修正後に自動テストを実行し、失敗した場合は AI が再修正します。"
+fi
+
 attempt=1
 agent_status="failed"
 while :; do
+  status "🧠 AI が作業中（試行 ${attempt}/${MAX_RETRIES}）" "$work_detail"
   echo "::group::試行 ${attempt}/${MAX_RETRIES}: Aider 実行 (Attempt ${attempt}/${MAX_RETRIES})"
   set +e
   aider "${ARGS[@]}" "${FILES[@]+"${FILES[@]}"}" 2>&1 | tee "$LOG_FILE"
@@ -126,6 +151,8 @@ while :; do
   fi
 
   echo "${DELAY} 秒待機して再試行します... (Backing off ${DELAY}s)"
+  status "⏳ レートリミット待機中（${DELAY} 秒後に試行 $((attempt + 1))/${MAX_RETRIES}）" \
+    "Gemini API 無料枠の上限に達したため、自動で待機してから再試行します。止まっているわけではありません。"
   reset_worktree
   sleep "$DELAY"
   DELAY=$((DELAY * 2))
@@ -136,6 +163,7 @@ done
 # テストには API キーを渡さない。
 test_status="skipped"
 if [ "$agent_status" = "success" ] && [ -n "${TEST_COMMAND:-}" ]; then
+  status "🧪 最終テストを実行中" "\`${TEST_COMMAND}\` の結果で PR を通常 / Draft のどちらにするか決めます。"
   echo "::group::最終テストの実行 (Final Test Run)"
   if env -u GEMINI_API_KEY bash "$TEST_SCRIPT" > "${WORK_DIR}/final_test.log" 2>&1; then
     test_status="passed"

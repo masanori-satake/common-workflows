@@ -47,6 +47,10 @@ inputs:
   github_token:
     description: 'push / PR 作成 / Issue コメント用トークン'
     required: true
+  status_comment_id:
+    description: 'Issue 上の状況コメントの ID（gemini-ai-agent-status の ack 出力。空なら状況更新しない）'
+    required: false
+    default: ''
 
 outputs:
   agent_status:
@@ -62,6 +66,18 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # 状況表示スクリプトは同じリポジトリの gemini-ai-agent-status action に置いている
+    - name: '状況表示: 準備中 (Status: Preparing)'
+      shell: bash
+      env:
+        STATUS_GH_TOKEN: ${{ inputs.github_token }}
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update \
+          "⚙️ 準備中" "Aider のインストールと指示内容の解析を行っています。"
+
     - name: 'Python環境のセットアップ (Setup Python)'
       uses: actions/setup-python@v5
       with:
@@ -108,6 +124,12 @@ runs:
         TEST_COMMAND: ${{ inputs.test_command }}
         MAX_RETRIES: ${{ inputs.max_retries }}
         INITIAL_DELAY: ${{ inputs.initial_delay }}
+        # 状況表示用（run_aider.sh が Aider・テストの環境からは除去する）
+        STATUS_GH_TOKEN: ${{ inputs.github_token }}
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        STATUS_SCRIPT: ${{ github.action_path }}/../gemini-ai-agent-status/status_comment.sh
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "$GITHUB_ACTION_PATH/run_aider.sh"
 
     - name: 'Aider ログの保存 (Upload Aider Logs)'
@@ -131,4 +153,6 @@ runs:
         TEST_STATUS: ${{ steps.aider.outputs.test_status }}
         ATTEMPTS: ${{ steps.aider.outputs.attempts }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        STATUS_SCRIPT: ${{ github.action_path }}/../gemini-ai-agent-status/status_comment.sh
       run: bash "$GITHUB_ACTION_PATH/create_pr.sh"

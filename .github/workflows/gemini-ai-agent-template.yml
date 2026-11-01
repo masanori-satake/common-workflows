@@ -20,8 +20,13 @@ name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
 #     （スクリプトインジェクション対策）。$GITHUB_ENV へはランダムなデリミタで書き込む。
 #   - ボット（*[bot] / sender.type == Bot）による起動を遮断（無限ループ防止）
 #   - コメント起動は author_association が allowed_associations に含まれる場合のみ
-#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成ステップにのみ渡し、
-#     GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
+#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成・状況表示にのみ使い、
+#     Aider とテストの子プロセスには渡さない。GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
+#
+# 状況表示 (Status Display)
+#   - acknowledge ジョブが順番待ちの外で即座に 👀 リアクションと状況コメントを投稿
+#   - 状況コメントは 1 件を段階ごとに書き換える（準備中 → 作業中 → 429 待機 → テスト → PR 作成）
+#   - 完了時に 👀 を 🚀（成功）/ 😕（失敗・中断）へ切り替え、結果は通知のため新規コメントでも知らせる
 #   - Aider のシェルコマンド提案・URL 自動取得は無効化（--yes-always との組合せ対策）
 #
 # 呼び出し側の前提 (Caller Requirements)
@@ -95,8 +100,10 @@ on:
         required: true
 
 jobs:
-  run-agent:
-    name: 'Gemini AI エージェント実行 (Run Gemini AI Agent)'
+  # 受付通知: concurrency の順番待ちの外で即座に動き、Issue に 👀 と状況コメントを出す。
+  # 起動ガードはこのジョブに置き、run-agent は needs により同じ条件でのみ動く。
+  acknowledge:
+    name: '受付通知 (Acknowledge Request)'
     # 無限ループ防止: ボット自身のイベントでは起動しない。
     # PR 上のコメント（issue_comment は PR でも発火する）は対象外。
     # コメント起動は信頼できる author_association に限定する（シークレット悪用防止）。
@@ -108,6 +115,27 @@ jobs:
         (github.event_name == 'issue_comment' &&
           !github.event.issue.pull_request &&
           contains(format(',{0},', inputs.allowed_associations), format(',{0},', github.event.comment.author_association))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      comment_id: ${{ steps.ack.outputs.comment_id }}
+      reaction_id: ${{ steps.ack.outputs.reaction_id }}
+    steps:
+      - name: '受付リアクションと状況コメントの投稿 (Post Acknowledgement)'
+        id: ack
+        # 状況表示は補助機能のため、失敗しても本体の実行は止めない
+        continue-on-error: true
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
+        with:
+          mode: ack
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  run-agent:
+    name: 'Gemini AI エージェント実行 (Run Gemini AI Agent)'
+    # 起動ガードは acknowledge ジョブで判定済み（スキップ時は needs によりこのジョブもスキップ）
+    needs: acknowledge
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
@@ -175,7 +203,23 @@ jobs:
           command_prefix: ${{ inputs.command_prefix }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
 
+      # 状況コメントを最終状態にし、👀 を 🚀（成功）/ 😕（失敗・中断）に切り替える。
+      # 前段（チェックアウト・依存インストール）の失敗やタイムアウト時も実行する。
+      - name: '状況表示: 完了 (Status: Finished)'
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
+        with:
+          mode: finish
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
+          reaction_id: ${{ needs.acknowledge.outputs.reaction_id }}
+          result: ${{ steps.agent.outcome == 'success' && (steps.agent.outputs.pr_url != '' && 'pr' || 'nochange') || (steps.agent.outcome == 'cancelled' && 'cancelled' || 'failure') }}
+          pr_url: ${{ steps.agent.outputs.pr_url }}
+
+      # 状況コメントの書き換えでは通知が飛ばないため、失敗は新規コメントで知らせる
       - name: '失敗時の Issue 通知 (Notify Failure on Issue)'
         if: ${{ failure() && github.event.issue.number }}
         env:
