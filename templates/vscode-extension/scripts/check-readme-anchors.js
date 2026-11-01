@@ -23,29 +23,48 @@ const readmePath = process.argv[2] ? path.resolve(process.argv[2]) : path.join(r
 const REQUIRED_HEADING = /^#{2,3}\s/;
 const ANCHOR_LINE = /^<a id="([^"]+)"><\/a>\s*$/;
 const VALID_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// フェンス行（CommonMark 準拠: 最大 3 スペースのインデント + 3 個以上の ` または ~）
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+// コードスパン（開始と終了のバッククォート列の長さが一致するもの）
+const CODE_SPAN = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+// 独立した id 属性（`data-id` などは除外するため、直前に空白を要求する）
+const ANCHOR_ID = /<a\s(?:[^>]*\s)?id="([^"]+)"/g;
+// ページ内リンク: Markdown `](#xxx)` / `](#xxx "タイトル")` と HTML `href="#xxx"`
+const PAGE_LINK = /\]\(\s*#([^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)|href="#([^"]+)"/g;
 
 const lines = fs.readFileSync(readmePath, 'utf8').split(/\r?\n/);
 const errors = [];
 const ids = new Map(); // id -> 行番号
 const links = []; // { id, line }
 
-let inFence = false;
+let fence = null; // フェンス内の場合は { char, length }
 lines.forEach((line, index) => {
   const lineNo = index + 1;
+  const fenceMatch = line.match(FENCE_LINE);
 
-  // フェンスドコードブロック内は検証対象外
-  if (/^\s*(```|~~~)/.test(line)) {
-    inFence = !inFence;
+  // フェンスドコードブロック内は検証対象外。
+  // 開始時と同じ記号で、同じ長さ以上、かつ記号の後が空白のみの行でだけ閉じる
+  if (fence) {
+    if (
+      fenceMatch &&
+      fenceMatch[1][0] === fence.char &&
+      fenceMatch[1].length >= fence.length &&
+      fenceMatch[2].trim() === ''
+    ) {
+      fence = null;
+    }
     return;
   }
-  if (inFence) {
+  // バッククォートのフェンスは情報文字列にバッククォートを含められない（CommonMark）
+  if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+    fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
     return;
   }
 
-  // インラインコード（`...`）内の記述は説明文として扱い、検証対象外とする
-  const text = line.replace(/`[^`]*`/g, '');
+  // インラインコード内の記述は説明文として扱い、検証対象外とする
+  const text = line.replace(CODE_SPAN, '');
 
-  for (const match of text.matchAll(/<a\s[^>]*\bid="([^"]+)"/g)) {
+  for (const match of text.matchAll(ANCHOR_ID)) {
     const id = match[1];
     if (!VALID_ID.test(id)) {
       errors.push(`L${lineNo}: ID "${id}" は ASCII の英小文字・数字・ハイフンのみで記述してください`);
@@ -57,7 +76,7 @@ lines.forEach((line, index) => {
     }
   }
 
-  for (const match of text.matchAll(/\]\(#([^)\s]+)\)|href="#([^"]+)"/g)) {
+  for (const match of text.matchAll(PAGE_LINK)) {
     links.push({ id: match[1] || match[2], line: lineNo });
   }
 
