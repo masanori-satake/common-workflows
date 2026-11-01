@@ -5,6 +5,7 @@ name: '共通セキュリティスキャン (Base Security)'
 # -----------------------------------------------------------------------------
 #   - Node.js           : lts/*
 #   - npm audit         : 既定で実行（--audit-level=high）
+#                         audit_omit_dev: true で devDependencies を除外（--omit=dev）
 #   - OSV-Scanner       : 既定で実行（Solo 全プロジェクトで利用）
 #                         OSV のバージョンを本ファイルで一元管理し、各リポジトリの
 #                         参照バージョンのばらつきを解消する
@@ -32,6 +33,11 @@ on:
         required: false
         type: string
         default: 'high'
+      audit_omit_dev:
+        description: 'npm audit で devDependencies を除外するか（--omit=dev）。成果物に同梱されない開発ツールの脆弱性で失敗させない場合に true'
+        required: false
+        type: boolean
+        default: false
       enable_osv_scan:
         description: 'OSV-Scanner を実行するか（統一値: true）'
         required: false
@@ -64,7 +70,15 @@ jobs:
           cache: 'npm'
 
       - name: '脆弱性チェックの実行 (Audit Dependencies)'
-        run: npm audit --audit-level=${{ inputs.audit_level }}
+        env:
+          AUDIT_LEVEL: ${{ inputs.audit_level }}
+          OMIT_DEV: ${{ inputs.audit_omit_dev }}
+        run: |
+          if [ "$OMIT_DEV" = "true" ]; then
+            npm audit --audit-level="$AUDIT_LEVEL" --omit=dev
+          else
+            npm audit --audit-level="$AUDIT_LEVEL"
+          fi
 
   osv-scan:
     name: 'OSV-Scanner による脆弱性検査 (Vulnerability Scan)'
