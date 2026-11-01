@@ -13,7 +13,7 @@
     "vscode:prepublish": "npm run package",
     "typecheck": "tsc --noEmit",
     "check-types": "tsc --noEmit",
-    "lint": "echo \"No linter configured yet\"",
+    "lint": "echo \"No linter configured yet\" && npm run check-readme-anchors",
     "test": "echo \"No test configured yet\"",
     "build": "echo \"Implement build (e.g., tsc or esbuild)\"",
     "compile": "npm run check-version && npm run check-types && npm run lint && npm run build",
@@ -21,6 +21,7 @@
     "pretest": "npm run check-version && npm run check-types && npm run lint && npm run compile",
     "check-version": "node scripts/check-version.js",
     "check-version-bump": "node scripts/check-version.js --check-bump",
-    "update-version": "node scripts/update-version.js"
+    "update-version": "node scripts/update-version.js",
+    "check-readme-anchors": "node scripts/check-readme-anchors.js"
   }
 }
