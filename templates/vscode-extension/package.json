@@ -1,0 +1,26 @@
+{
+  "name": "my-vscode-extension",
+  "displayName": "My VSCode Extension",
+  "publisher": "your-publisher",
+  "version": "0.1.0",
+  "description": "VSCode extension starter template",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "typecheck": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "echo \"No linter configured yet\"",
+    "test": "echo \"No test configured yet\"",
+    "build": "echo \"Implement build (e.g., tsc or esbuild)\"",
+    "compile": "npm run check-version && npm run check-types && npm run lint && npm run build",
+    "package": "npm run check-version && npm run check-types && npm run lint && npm run build",
+    "pretest": "npm run check-version && npm run check-types && npm run lint && npm run compile",
+    "check-version": "node scripts/check-version.js",
+    "check-version-bump": "node scripts/check-version.js --check-bump",
+    "update-version": "node scripts/update-version.js"
+  }
+}

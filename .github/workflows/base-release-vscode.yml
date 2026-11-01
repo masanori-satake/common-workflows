@@ -1,0 +1,127 @@
+name: 'VSCode拡張機能リリース (Base Release for VSCode Extension)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - Node.js           : lts/*
+#   - 依存インストール  : npm ci       （package-lock.json 前提・再現性重視）
+#   - VSIX 生成         : npx @vscode/vsce package --no-git-tag-version
+#                         CI の成果物を引き継がず、リリースジョブ内で再生成する
+#                         （同一 commit から同一 VSIX が得られる）
+#   - Marketplace 公開  : npx @vscode/vsce publish --skip-duplicate（VSCE_PAT）
+#   - Open VSX 公開     : npx ovsx publish --no-dependencies --skip-duplicate（OVSX_PAT）
+#   - GitHub Release    : softprops/action-gh-release（commit SHA ピン留め・VSIX 添付）
+#
+# シークレットは呼出側の secrets: inherit で受領する:
+#   - VSCE_PAT      : Visual Studio Marketplace 公開用 PAT
+#   - OVSX_PAT      : Open VSX Registry 公開用 PAT
+#   - GITHUB_TOKEN  : GitHub Release 作成用（自動提供）
+#
+# 既有 base-release.yml（Chrome 向け）との差異:
+#   - ZIP でなく VSIX を生成
+#   - Marketplace / Open VSX への公開を実行
+#   - 版抽出は package.json のみ（manifest.json 非依存）
+#   - softprops/action-gh-release を commit SHA ピン留め
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      publish_marketplace:
+        description: 'Visual Studio Marketplace へ公開するか'
+        required: false
+        type: boolean
+        default: true
+      publish_ovsx:
+        description: 'Open VSX Registry へ公開するか'
+        required: false
+        type: boolean
+        default: true
+      create_github_release:
+        description: 'GitHub Release を作成するか'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  release:
+    name: 'VSIX作成・公開・リリース (Build, Publish & Release)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js)'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: '依存関係のインストール (Install Dependencies)'
+        run: npm ci
+
+      - name: 'VSIXパッケージの作成 (Package Extension as .vsix)'
+        run: npx @vscode/vsce package --no-git-tag-version
+
+      - name: 'VSIXファイルパスの特定 (Determine VSIX File Path)'
+        id: vsix_info
+        run: |
+          VSIX_PATH=$(ls *.vsix | head -n 1)
+          echo "vsix_path=${VSIX_PATH}" >> $GITHUB_OUTPUT
+
+      - name: 'Visual Studio Marketplace へ公開 (Publish to VS Marketplace)'
+        id: vsce_publish
+        if: ${{ inputs.publish_marketplace }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          PACKAGE_PATH: ${{ steps.vsix_info.outputs.vsix_path }}
+        run: |
+          OUTPUT=$(npx @vscode/vsce publish --packagePath "$PACKAGE_PATH" --skip-duplicate 2>&1) || {
+            echo "$OUTPUT"
+            exit 1
+          }
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qiE "(already exists|already published\. Skipping publish\.)"; then
+            echo "skipped=true" >> $GITHUB_OUTPUT
+          else
+            echo "skipped=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 'Open VSX Registry へ公開 (Publish to Open VSX)'
+        if: ${{ inputs.publish_ovsx }}
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          PACKAGE_PATH: ${{ steps.vsix_info.outputs.vsix_path }}
+        run: |
+          npx ovsx publish "$PACKAGE_PATH" -p "$OVSX_PAT" --no-dependencies --skip-duplicate
+
+      - name: 'バージョン情報の取得 (Get Version)'
+        id: get_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: 'GitHub Releaseの作成とVSIX添付 (Create GitHub Release)'
+        if: ${{ inputs.create_github_release }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_PATH: ${{ steps.vsix_info.outputs.vsix_path }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.tag }}
+          name: ${{ steps.get_version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: "${{ env.PACKAGE_PATH }}"
+          generate_release_notes: true
