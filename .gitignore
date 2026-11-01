@@ -8,3 +8,4 @@ node_modules/
 
 # その他のエージェント作業ディレクトリ (Other agent worktrees)
 .kilo/
+.agents/
