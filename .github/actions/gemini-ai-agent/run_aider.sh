@@ -60,7 +60,9 @@ EOF
 # git ルートのものが読み込まれるため、実行中はファイル自体を退避する（終了時に元へ戻す）。
 EMPTY_CONFIG="${WORK_DIR}/empty.aider.conf.yml"
 EMPTY_ENV="${WORK_DIR}/empty.env"
-: > "$EMPTY_CONFIG"
+# 設定ファイルは空のマッピング（{}）にする。空ファイルは YAML として None になり、
+# Aider（configargparse）が「key: value の形式ではない」としてエラー終了するため
+printf '{}\n' > "$EMPTY_CONFIG"
 : > "$EMPTY_ENV"
 QUARANTINE_DIR="${WORK_DIR}/quarantine"
 QUARANTINE_FILES=(.env .aider.conf.yml .aider.model.settings.yml .aider.model.metadata.json)
