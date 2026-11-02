@@ -6,6 +6,7 @@ name: 'Gemini AI コーダー起動 (Trigger Gemini AI Coder)'
 #   - 本文に `Files: src/a.ts, src/b.ts` 行を書くと、そのファイルだけを AI に渡す
 #   - PR に `/ai-fix [指示]` とコメントすると、失敗した CI を AI が修正して PR ブランチに push する
 #   - PR に `/ai-bump patch` / `/ai-bump minor` とコメントすると、バージョンを更新する
+#   - Issue / PR に `/ai-help` とコメントすると、使えるコマンドと注意事項を表示する
 #
 # 事前準備 (Setup): Web 画面での詳細手順は導入ガイドを参照
 #   https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md
@@ -32,6 +33,7 @@ jobs:
       (github.event_name == 'issue_comment' &&
         !github.event.issue.pull_request &&
         startsWith(github.event.comment.body, '/ai') &&
+        !startsWith(github.event.comment.body, '/ai-') &&
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     uses: masanori-satake/common-workflows/.github/workflows/gemini-ai-agent-template.yml@v1
     permissions:
@@ -66,3 +68,17 @@ jobs:
       test_command: 'xvfb-run --auto-servernum npm test'
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # Issue / PR へのコメントで起動: /ai-help（ヘルプ）と、解釈できない /ai-xxx への案内
+  ai-help:
+    name: 'Gemini AI ヘルプ表示 (Execute Gemini AI Help)'
+    if: >-
+      github.event_name == 'issue_comment' &&
+      startsWith(github.event.comment.body, '/ai-') &&
+      !(github.event.issue.pull_request &&
+        (startsWith(github.event.comment.body, '/ai-fix') || startsWith(github.event.comment.body, '/ai-bump'))) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    uses: masanori-satake/common-workflows/.github/workflows/gemini-ai-help-template.yml@v1
+    permissions:
+      issues: write
+      pull-requests: write

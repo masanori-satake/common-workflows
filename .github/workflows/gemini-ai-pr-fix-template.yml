@@ -10,22 +10,27 @@ name: 'Gemini AI PR 修正 (Gemini AI PR Fix Shared Workflow)'
 # 動作 (Behavior)
 #   - 対象は PR の最新コミットで失敗した CI（ワークフローごとの最新実行）
 #   - バージョンチェックの失敗は AI に直させず、/ai-bump の使い方を PR にコメントする
-#   - 修正後は Lint → テスト → ビルドで検証し、失敗すれば AI が再修正する
-#   - push 後、GITHUB_TOKEN の push では CI が起動しないため workflow_dispatch で再実行する
+#   - AI による修正（ai-N）と検証（verify-N: Lint → テスト → ビルド）を交互に行い、検証が失敗したら
+#     そのログを次の回の AI に渡して再修正する（最大 max_fix_rounds 回。上限 3）
+#   - push 後、GITHUB_TOKEN の push では CI が起動しないため、完了済みの全ワークフローを
+#     workflow_dispatch で再実行する
 #   - 状況表示（👀 リアクション + 状況コメント）は受付・作業開始・作業完了・push・完了の時点で更新する
 #
-# ジョブ構成とセキュリティ方針 (Jobs & Security Policy)
-#   acknowledge : 受付通知（issues / pull-requests: write）。PR のコードは実行しない
-#   work        : PR のコード（npm ci・Aider・テスト・update-version）を実行する。読み取り権限のみで、
-#                 書き込み可能なトークンを持たない。作業結果を patch として artifact に出力する
-#   publish     : 書き込み権限を持つ。新しく checkout し、patch を git フック無効で適用して push する。
-#                 PR のコードは一切実行せず、work ジョブの出力・patch は検証してから使う
-#   PR のコードは GITHUB_ENV / GITHUB_PATH / BASH_ENV / .git/config / プロセスのメモリを通じて
-#   同じジョブの後続ステップに影響し得るため、書き込みトークンは別ジョブ（別ランナー）に分離している。
+# ジョブ構成と実行境界 (Jobs & Execution Boundaries)
+#   ジョブ        GitHub トークン  Gemini キー  PR のコード実行
+#   acknowledge   issues/PR 書込   なし         しない    受付通知
+#   prepare       読み取りのみ     なし         しない    PR 情報・CI ログの収集、指示文の作成
+#   ai-N          なし             あり         しない    Aider で修正（テストなし、.env / .aider* 設定は退避）
+#   verify-N      なし             なし         する      npm ci と Lint → テスト → ビルド
+#   bump          なし             なし         する      update-version によるバージョン更新
+#   publish       書き込み         なし         しない    結果を検証し、patch を適用して push・報告
+#   PR のコード（依存パッケージを含む）は GITHUB_ENV / GITHUB_PATH / BASH_ENV / .git/config /
+#   プロセスのメモリを通じて同じジョブの後続ステップに影響し得るため、キーとトークンは
+#   PR のコードを実行しない別ジョブ（別ランナー）にだけ渡す。ジョブ間は artifact（patch・ログ）で受け渡す。
 #   - コメント起動は author_association が allowed_associations に含まれる場合のみ
-#   - フォークからの PR は対象外（push できない。またフォークのコードを動かさない）
+#   - フォークからの PR は対象外
 #   - .github/workflows/ の変更は push しない（GITHUB_TOKEN では push できない）
-#   - 作業中は状況コメントを更新しない（work ジョブはコメントを書く権限を持たないため）
+#   - 作業中は状況コメントを更新しない（作業系ジョブはコメントを書く権限を持たないため）
 #
 # 呼び出し側の前提 (Caller Requirements)
 #   - permissions: contents / issues / pull-requests / actions すべて write
@@ -66,13 +71,18 @@ on:
         required: false
         type: number
         default: 30
+      max_fix_rounds:
+        description: 'AI による修正と検証の最大往復回数（1〜3）'
+        required: false
+        type: number
+        default: 3
       allowed_associations:
         description: 'コメント起動を許可する author_association（カンマ区切り・空白なし）'
         required: false
         type: string
         default: 'OWNER,MEMBER,COLLABORATOR'
       timeout_minutes:
-        description: '作業ジョブのタイムアウト（分）'
+        description: 'AI ジョブ 1 回あたりのタイムアウト（分）'
         required: false
         type: number
         default: 30
@@ -110,7 +120,7 @@ jobs:
           mode: ack
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 作業ジョブは状況コメントを書く権限を持たないため、ここで「作業中」にしておく
+      # 作業系ジョブは状況コメントを書く権限を持たないため、ここで「作業中」にしておく
       - name: '状況表示: 作業ジョブで処理中 (Status: Working)'
         if: ${{ steps.ack.outputs.comment_id != '' }}
         continue-on-error: true
@@ -120,14 +130,14 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ steps.ack.outputs.comment_id }}
           headline: '⚙️ 作業ジョブで処理中'
-          detail: '依存関係のインストール、CI ログの解析、AI による修正と検証（/ai-bump ではバージョン更新）を行っています。同じ PR で前の処理が実行中の場合は、その完了後に開始します。安全のため作業中は状況を更新しません（数分〜十数分かかります）。進み具合は実行ログで確認できます。'
+          detail: 'CI ログの解析、AI による修正と検証（失敗した場合は検証ログをもとに最大 3 回まで再修正）を行っています。/ai-bump ではバージョンを更新しています。同じ PR で前の処理が実行中の場合は、その完了後に開始します。安全のため作業中は状況を更新しません（数分〜数十分かかります）。進み具合は実行ログで確認できます。'
 
-  # 作業ジョブ: PR のコードを実行する。書き込み可能なトークンを持たせない
-  work:
-    name: 'PR への AI 対応・作業 (Work: Fix CI / Bump Version)'
+  # 準備: PR 情報と CI ログを集める。読み取りトークンのみ・PR のコードは実行しない
+  prepare:
+    name: '準備 (Prepare)'
     needs: acknowledge
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout_minutes }}
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -138,46 +148,249 @@ jobs:
       cancel-in-progress: false
       queue: max
     outputs:
-      mode: ${{ steps.work.outputs.mode }}
-      bump_type: ${{ steps.work.outputs.bump_type }}
-      head_ref: ${{ steps.work.outputs.head_ref }}
-      head_sha: ${{ steps.work.outputs.head_sha }}
-      action: ${{ steps.work.outputs.action }}
-      pending_count: ${{ steps.work.outputs.pending_count }}
-      rerun_workflows: ${{ steps.work.outputs.rerun_workflows }}
-      verify_command: ${{ steps.work.outputs.verify_command }}
-      attempts: ${{ steps.work.outputs.attempts }}
-      test_status: ${{ steps.work.outputs.test_status }}
-      new_version: ${{ steps.work.outputs.new_version }}
-
+      mode: ${{ steps.prepare.outputs.mode }}
+      bump_type: ${{ steps.prepare.outputs.bump_type }}
+      head_ref: ${{ steps.prepare.outputs.head_ref }}
+      head_sha: ${{ steps.prepare.outputs.head_sha }}
+      base_ref: ${{ steps.prepare.outputs.base_ref }}
+      action: ${{ steps.prepare.outputs.action }}
+      pending_count: ${{ steps.prepare.outputs.pending_count }}
+      rerun_workflows: ${{ steps.prepare.outputs.rerun_workflows }}
+      verify_command: ${{ steps.prepare.outputs.verify_command }}
     steps:
       - name: 'PR ブランチのチェックアウト (Checkout PR Head)'
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
-          # バージョン比較のため全履歴とベースブランチを取得する
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: 'Gemini AI による作業 (Run AI Work)'
-        id: work
+      - name: 'PR 情報と CI ログの収集 (Collect PR & CI Info)'
+        id: prepare
         uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
         with:
-          model_name: ${{ inputs.model_name }}
+          stage: prepare
           test_command: ${{ inputs.test_command }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # バージョン更新: PR のコード（update-version）を実行する。キー・書き込みトークンなし
+  bump:
+    name: 'バージョン更新 (Bump Version)'
+    needs: prepare
+    if: ${{ needs.prepare.outputs.mode == 'bump' && needs.prepare.outputs.action == 'patch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      has_patch: ${{ steps.bump.outputs.has_patch }}
+      new_version: ${{ steps.bump.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          # ベースブランチのバージョンと比較するため全履歴を取得する
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 'バージョンの更新 (Bump Version)'
+        id: bump
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: bump
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          base_ref: ${{ needs.prepare.outputs.base_ref }}
+          bump_type: ${{ needs.prepare.outputs.bump_type }}
           node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 1 回目: AI（キーあり・コード実行なし）→ 検証（キーなし・コード実行あり） ----
+  ai-1:
+    name: 'AI による修正 1 回目 (AI Fix Round 1)'
+    needs: prepare
+    if: ${{ needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.action == 'patch' && inputs.max_fix_rounds >= 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '1'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          model_name: ${{ inputs.model_name }}
           aider_version: ${{ inputs.aider_version }}
           max_retries: ${{ inputs.max_retries }}
           initial_delay: ${{ inputs.initial_delay }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          # このジョブのトークンは読み取り権限のみ（PR 情報・CI ログの取得用）
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          patch_artifact: ai-pr-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
 
-  # 公開ジョブ: 書き込み権限を持つ。PR のコードは実行せず、作業ジョブの結果を検証して push する
+  verify-1:
+    name: '修正の検証 1 回目 (Verify Round 1)'
+    needs: [prepare, ai-1]
+    if: ${{ needs.ai-1.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '1'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 2 回目: 1 回目の検証が失敗した場合のみ ----
+  ai-2:
+    name: 'AI による修正 2 回目 (AI Fix Round 2)'
+    needs: [prepare, ai-1, verify-1]
+    if: ${{ needs.verify-1.outputs.status == 'failed' && inputs.max_fix_rounds >= 2 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '2'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          model_name: ${{ inputs.model_name }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  verify-2:
+    name: '修正の検証 2 回目 (Verify Round 2)'
+    needs: [prepare, ai-2]
+    if: ${{ needs.ai-2.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '2'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 3 回目: 2 回目の検証が失敗した場合のみ ----
+  ai-3:
+    name: 'AI による修正 3 回目 (AI Fix Round 3)'
+    needs: [prepare, ai-2, verify-2]
+    if: ${{ needs.verify-2.outputs.status == 'failed' && inputs.max_fix_rounds >= 3 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '3'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          model_name: ${{ inputs.model_name }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  verify-3:
+    name: '修正の検証 3 回目 (Verify Round 3)'
+    needs: [prepare, ai-3]
+    if: ${{ needs.ai-3.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '3'
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # 公開: 書き込み権限を持つ。PR のコードは実行せず、作業系ジョブの結果を検証して push する
   publish:
-    name: 'PR への AI 対応・公開 (Publish: Push & Report)'
-    needs: [acknowledge, work]
+    name: '公開 (Publish: Push & Report)'
+    needs: [acknowledge, prepare, bump, ai-1, verify-1, ai-2, verify-2, ai-3, verify-3]
     if: ${{ always() && needs.acknowledge.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -188,9 +401,9 @@ jobs:
       actions: write
 
     steps:
-      # 作業ジョブとは別のランナーで、PR の head を新しく取得する（作業ジョブの状態を引き継がない）
+      # 作業系ジョブとは別のランナーで、PR の head を新しく取得する（状態を引き継がない）
       - name: 'PR ブランチのチェックアウト (Checkout PR Head)'
-        if: ${{ needs.work.result == 'success' && needs.work.outputs.action == 'patch' }}
+        if: ${{ needs.prepare.result == 'success' && needs.prepare.outputs.action == 'patch' }}
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
@@ -198,22 +411,21 @@ jobs:
 
       - name: '作業結果の公開 (Publish Work Result)'
         id: publish
-        if: ${{ needs.work.result == 'success' }}
+        if: ${{ needs.prepare.result == 'success' }}
         uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-publish@v1
         with:
-          mode: ${{ needs.work.outputs.mode }}
-          bump_type: ${{ needs.work.outputs.bump_type }}
-          head_ref: ${{ needs.work.outputs.head_ref }}
-          head_sha: ${{ needs.work.outputs.head_sha }}
-          work_action: ${{ needs.work.outputs.action }}
-          pending_count: ${{ needs.work.outputs.pending_count }}
-          rerun_workflows: ${{ needs.work.outputs.rerun_workflows }}
-          verify_command: ${{ needs.work.outputs.verify_command }}
-          attempts: ${{ needs.work.outputs.attempts }}
-          test_status: ${{ needs.work.outputs.test_status }}
-          new_version: ${{ needs.work.outputs.new_version }}
+          needs_json: ${{ toJSON(needs) }}
+          max_rounds: ${{ inputs.max_fix_rounds }}
+          mode: ${{ needs.prepare.outputs.mode }}
+          bump_type: ${{ needs.prepare.outputs.bump_type }}
+          head_ref: ${{ needs.prepare.outputs.head_ref }}
+          head_sha: ${{ needs.prepare.outputs.head_sha }}
+          work_action: ${{ needs.prepare.outputs.action }}
+          pending_count: ${{ needs.prepare.outputs.pending_count }}
+          rerun_workflows: ${{ needs.prepare.outputs.rerun_workflows }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
           model_name: ${{ inputs.model_name }}
-          patch_artifact: ai-pr-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact_prefix: ai-pr-${{ github.run_id }}-${{ github.run_attempt }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
 
@@ -226,12 +438,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
           reaction_id: ${{ needs.acknowledge.outputs.reaction_id }}
-          result: ${{ needs.work.result == 'cancelled' && 'cancelled' || (steps.publish.outcome == 'success' && steps.publish.outputs.result || (steps.publish.outcome == 'cancelled' && 'cancelled' || 'failure')) }}
+          result: ${{ needs.prepare.result == 'cancelled' && 'cancelled' || (steps.publish.outcome == 'success' && steps.publish.outputs.result || (steps.publish.outcome == 'cancelled' && 'cancelled' || 'failure')) }}
           pr_url: ${{ steps.publish.outputs.commit_url }}
 
       # 状況コメントの書き換えでは通知が飛ばないため、失敗は新規コメントで知らせる
       - name: '失敗時の PR 通知 (Notify Failure on PR)'
-        if: ${{ always() && (needs.work.result == 'failure' || steps.publish.outcome == 'failure') }}
+        if: ${{ always() && (needs.prepare.result == 'failure' || steps.publish.outcome == 'failure') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.issue.number }}

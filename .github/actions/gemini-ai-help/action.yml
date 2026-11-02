@@ -1,0 +1,24 @@
+name: 'Gemini AI エージェントのヘルプ (Gemini AI Agent Help)'
+description: 'Issue / PR への /ai-help コメント（および解釈できない /ai-xxx コメント）に、使えるコマンドと注意事項をコメントで返す共通 composite action。'
+
+inputs:
+  github_token:
+    description: 'Issue / PR コメント用トークン（issues / pull-requests: write）'
+    required: true
+  guide_url:
+    description: 'ヘルプの末尾に載せる導入ガイドの URL'
+    required: false
+    default: 'https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'ヘルプの投稿 (Post Help)'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        GUIDE_URL: ${{ inputs.guide_url }}
+      run: bash "$GITHUB_ACTION_PATH/post_help.sh"

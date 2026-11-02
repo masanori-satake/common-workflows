@@ -1,53 +1,48 @@
 name: 'Gemini AI PR 修正・公開 (Gemini AI PR Fix - Publish)'
-description: 'gemini-ai-pr-fix（作業ジョブ）の結果を検証し、patch を PR ブランチへ push して CI を再実行・報告する共通 composite action。PR のコードは一切実行しない。PR の head（refs/pull/N/head）を新しくチェックアウトしたジョブで使う。'
+description: 'gemini-ai-pr-fix の各ステージ（prepare / ai-N / verify-N / bump）の結果から公開する作業結果を選び、検証して PR ブランチへ push し、CI を再実行・報告する共通 composite action。PR のコードは一切実行しない。PR の head（refs/pull/N/head）を新しくチェックアウトしたジョブで使う。'
 
 inputs:
+  needs_json:
+    description: '呼び出し元ジョブの toJSON(needs)（ai-N / verify-N / bump の結果を含む）'
+    required: true
+  max_rounds:
+    description: 'AI と検証の最大往復回数'
+    required: false
+    default: '3'
   mode:
-    description: '作業ジョブの mode（fix / bump）'
+    description: 'prepare の mode（fix / bump）'
     required: true
   bump_type:
-    description: '作業ジョブの bump_type'
+    description: 'prepare の bump_type'
     required: false
     default: ''
   head_ref:
-    description: '作業ジョブの head_ref'
+    description: 'prepare の head_ref'
     required: true
   head_sha:
-    description: '作業ジョブの head_sha（作業の起点）'
+    description: 'prepare の head_sha（作業の起点）'
     required: true
   work_action:
-    description: '作業ジョブの action（patch / guidance-version / guidance-none）'
+    description: 'prepare の action（patch / guidance-version / guidance-none）'
     required: true
   pending_count:
-    description: '作業ジョブの pending_count'
+    description: 'prepare の pending_count'
     required: false
     default: '0'
   rerun_workflows:
-    description: '作業ジョブの rerun_workflows（要検証）'
+    description: 'prepare の rerun_workflows'
     required: false
     default: ''
   verify_command:
-    description: '作業ジョブの verify_command'
-    required: false
-    default: ''
-  attempts:
-    description: '作業ジョブの attempts（要検証）'
-    required: false
-    default: ''
-  test_status:
-    description: '作業ジョブの test_status（要検証）'
-    required: false
-    default: ''
-  new_version:
-    description: '作業ジョブの new_version（要検証）'
+    description: 'prepare の verify_command'
     required: false
     default: ''
   model_name:
     description: 'Gemini モデル名（報告用）'
     required: false
     default: 'gemini-3.8-flash'
-  patch_artifact:
-    description: '作業結果の patch の artifact 名'
+  artifact_prefix:
+    description: 'artifact 名の接頭辞'
     required: true
   github_token:
     description: 'push・PR コメント・CI 再実行用トークン'
@@ -81,12 +76,32 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: bash "$GITHUB_ACTION_PATH/../gemini-ai-pr-fix/post_guidance.sh"
 
+    # ---- 公開する作業結果の選択 ----
+    - name: '公開する作業結果の選択 (Select Work Result)'
+      id: select
+      if: ${{ inputs.work_action == 'patch' }}
+      shell: bash
+      env:
+        NEEDS_JSON: ${{ inputs.needs_json }}
+        MODE: ${{ inputs.mode }}
+        WORK_ACTION: ${{ inputs.work_action }}
+        ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+        MAX_ROUNDS: ${{ inputs.max_rounds }}
+      run: bash "$GITHUB_ACTION_PATH/select_result.sh"
+
+    - name: '作業ジョブの失敗 (Work Failed)'
+      if: ${{ inputs.work_action == 'patch' && steps.select.outputs.work_failed == 'true' }}
+      shell: bash
+      run: |
+        echo "::error::作業ジョブ（AI による修正またはバージョン更新）が失敗しました。実行ログを確認してください。"
+        exit 1
+
     # ---- 作業結果の検証と適用 ----
     - name: 'patch の取得 (Download Patch)'
-      if: ${{ inputs.work_action == 'patch' }}
+      if: ${{ inputs.work_action == 'patch' && steps.select.outputs.has_patch == 'true' }}
       uses: actions/download-artifact@v4
       with:
-        name: ${{ inputs.patch_artifact }}
+        name: ${{ steps.select.outputs.patch_artifact }}
         path: ${{ runner.temp }}/ai-patch
 
     - name: 'Git 作成者の設定 (Configure Git Author)'
@@ -101,12 +116,12 @@ runs:
       if: ${{ inputs.work_action == 'patch' }}
       shell: bash
       env:
-        PATCH_FILE: ${{ runner.temp }}/ai-patch/changes.patch
+        PATCH_FILE: ${{ steps.select.outputs.has_patch == 'true' && format('{0}/ai-patch/changes.patch', runner.temp) || '' }}
         HEAD_SHA: ${{ inputs.head_sha }}
         MODE: ${{ inputs.mode }}
-        ATTEMPTS: ${{ inputs.attempts }}
-        TEST_STATUS: ${{ inputs.test_status }}
-        NEW_VERSION: ${{ inputs.new_version }}
+        ATTEMPTS: ${{ steps.select.outputs.rounds }}
+        TEST_STATUS: ${{ steps.select.outputs.test_status }}
+        NEW_VERSION: ${{ steps.select.outputs.new_version }}
         RERUN_WORKFLOWS: ${{ inputs.rerun_workflows }}
         VERIFY_COMMAND: ${{ inputs.verify_command }}
       run: bash "$GITHUB_ACTION_PATH/apply_patch.sh"
@@ -121,7 +136,7 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         MODE: ${{ inputs.mode }}
         BUMP_TYPE: ${{ inputs.bump_type }}
-        ATTEMPTS: ${{ steps.apply.outputs.attempts }}
+        ROUNDS: ${{ steps.apply.outputs.attempts }}
         TEST_STATUS: ${{ steps.apply.outputs.test_status }}
         NEW_VERSION: ${{ steps.apply.outputs.new_version }}
       run: |
@@ -133,9 +148,8 @@ runs:
             failed) test_label="❌ 失敗" ;;
             *) test_label="⏭️ 未実行" ;;
           esac
-          retries=$(( ${ATTEMPTS:-1} - 1 ))
-          # 経過（History）には見出しだけが残るため、試行回数と検証結果は見出しに含める
-          headline="🔍 AI の作業が完了しました（試行 ${ATTEMPTS:-?} 回・再試行 ${retries} 回・検証: ${test_label}）"
+          # 経過（History）には見出しだけが残るため、修正回数と検証結果は見出しに含める
+          headline="🔍 AI の作業が完了しました（修正 ${ROUNDS:-?} 回・検証: ${test_label}）"
         fi
         bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update "$headline"
 

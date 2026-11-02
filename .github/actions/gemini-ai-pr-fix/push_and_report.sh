@@ -90,13 +90,13 @@ if [ "${MODE:-fix}" = "bump" ]; then
 else
   case "${TEST_STATUS:-skipped}" in
     passed) test_line="✅ 成功" ;;
-    failed) test_line="❌ 失敗（AI でも直しきれませんでした。差分を確認してください）" ;;
+    failed) test_line="❌ 失敗（上限回数まで修正しても検証が通りませんでした。差分を確認し、必要なら \`/ai-fix <追加の指示>\` で再依頼してください）" ;;
     *) test_line="⏭️ 未実行" ;;
   esac
   headline="🛠️ CI の失敗を修正するコミットを push しました。"
   details="- 検証コマンド: \`${VERIFY_COMMAND:-なし}\`"$'\n'
   details+="- 検証結果: ${test_line}"$'\n'
-  details+="- 試行回数: ${ATTEMPTS:-1}"$'\n'
+  details+="- 修正回数（AI と検証の往復）: ${ATTEMPTS:-1}"$'\n'
 fi
 
 msg="${headline}"$'\n\n'"${details}- コミット: ${commit_url}"$'\n'"- 実行ログ: ${RUN_URL}"

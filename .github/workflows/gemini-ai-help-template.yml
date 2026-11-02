@@ -1,0 +1,54 @@
+name: 'Gemini AI エージェントのヘルプ (Gemini AI Agent Help Shared Workflow)'
+
+# =============================================================================
+# 概要 (Overview)
+# -----------------------------------------------------------------------------
+# Issue / PR に `/ai-` で始まるコメントがあったときに、使えるコマンドと注意事項をコメントで返す。
+#   - /ai-help                 ヘルプを表示（Issue / PR に応じて表示順を変える）
+#   - Issue での /ai-fix・/ai-bump  PR でのみ使えることを案内
+#   - そのほかの /ai-xxx       解釈できなかったことを伝えてヘルプを表示
+#   PR での /ai-fix・/ai-bump は gemini-ai-pr-fix-template.yml が処理するため、ここでは扱わない。
+#
+# セキュリティ方針 (Security Policy)
+#   - コメント起動は author_association が allowed_associations に含まれる場合のみ
+#   - ボットのコメントには反応しない（無限ループ防止）
+#   - リポジトリのコードはチェックアウトも実行もしない
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      allowed_associations:
+        description: 'コメント起動を許可する author_association（カンマ区切り・空白なし）'
+        required: false
+        type: string
+        default: 'OWNER,MEMBER,COLLABORATOR'
+      guide_url:
+        description: 'ヘルプの末尾に載せる導入ガイドの URL'
+        required: false
+        type: string
+        default: 'https://github.com/masanori-satake/common-workflows/blob/main/docs/ai-agent-setup.md'
+
+jobs:
+  help:
+    name: 'ヘルプの表示 (Post Help)'
+    if: >-
+      github.event_name == 'issue_comment' &&
+      startsWith(github.event.comment.body, '/ai-') &&
+      !(github.event.issue.pull_request &&
+        (startsWith(github.event.comment.body, '/ai-fix') || startsWith(github.event.comment.body, '/ai-bump'))) &&
+      github.actor != 'github-actions[bot]' &&
+      !endsWith(github.actor, '[bot]') &&
+      github.event.sender.type != 'Bot' &&
+      contains(format(',{0},', inputs.allowed_associations), format(',{0},', github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: 'ヘルプの投稿 (Post Help)'
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-help@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          guide_url: ${{ inputs.guide_url }}

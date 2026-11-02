@@ -54,9 +54,46 @@ cat > "$MODEL_SETTINGS_FILE" <<EOF
   use_temperature: false
 EOF
 
+# リポジトリ由来の Aider 設定を読み込ませない。Aider は git ルートの .aider.conf.yml・.env・
+# .aider.model.settings.yml・.aider.model.metadata.json を自動で読み込むため、リポジトリ（PR）に
+# 置くだけで API の送信先やテストコマンド等を書き換えられる。.env は --env-file を指定しても
+# git ルートのものが読み込まれるため、実行中はファイル自体を退避する（終了時に元へ戻す）。
+EMPTY_CONFIG="${WORK_DIR}/empty.aider.conf.yml"
+EMPTY_ENV="${WORK_DIR}/empty.env"
+: > "$EMPTY_CONFIG"
+: > "$EMPTY_ENV"
+QUARANTINE_DIR="${WORK_DIR}/quarantine"
+QUARANTINE_FILES=(.env .aider.conf.yml .aider.model.settings.yml .aider.model.metadata.json)
+mkdir -p "$QUARANTINE_DIR"
+quarantine_repo_config() {
+  local f
+  for f in "${QUARANTINE_FILES[@]}"; do
+    if [ -e "$f" ] || [ -L "$f" ]; then
+      if [ -e "${QUARANTINE_DIR}/${f}" ] || [ -L "${QUARANTINE_DIR}/${f}" ]; then
+        rm -rf -- "$f" # 再試行時の作業ツリー復元で戻った分（退避済み）は削除するだけ
+      else
+        mv -- "$f" "${QUARANTINE_DIR}/${f}"
+        echo "::notice::リポジトリの ${f} を Aider の実行中だけ退避しました。"
+      fi
+    fi
+  done
+}
+restore_repo_config() {
+  local f
+  for f in "${QUARANTINE_FILES[@]}"; do
+    if [ -e "${QUARANTINE_DIR}/${f}" ] || [ -L "${QUARANTINE_DIR}/${f}" ]; then
+      rm -rf -- "$f"
+      mv -- "${QUARANTINE_DIR}/${f}" "$f"
+    fi
+  done
+}
+trap restore_repo_config EXIT
+
 ARGS=(
   --model "gemini/${MODEL_NAME}"
   --model-settings-file "$MODEL_SETTINGS_FILE"
+  --config "$EMPTY_CONFIG"
+  --env-file "$EMPTY_ENV"
   --yes-always
   --no-auto-commits
   --no-dirty-commits
@@ -101,6 +138,7 @@ attempt=1
 agent_status="failed"
 while :; do
   echo "::group::試行 ${attempt}/${MAX_RETRIES}: Aider 実行 (Attempt ${attempt}/${MAX_RETRIES})"
+  quarantine_repo_config
   set +e
   aider "${ARGS[@]}" "${FILES[@]+"${FILES[@]}"}" 2>&1 | tee "$LOG_FILE"
   exit_code=${PIPESTATUS[0]}
@@ -139,6 +177,8 @@ done
 # テストには API キーを渡さない。
 test_status="skipped"
 if [ "$agent_status" = "success" ] && [ -n "${TEST_COMMAND:-}" ]; then
+  # 最終テストはリポジトリの設定ファイルを戻した状態で実行する
+  restore_repo_config
   echo "::group::最終テストの実行 (Final Test Run)"
   if env -u GEMINI_API_KEY bash "$TEST_SCRIPT" > "${WORK_DIR}/final_test.log" 2>&1; then
     test_status="passed"
