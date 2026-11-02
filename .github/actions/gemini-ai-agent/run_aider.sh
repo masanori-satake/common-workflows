@@ -18,7 +18,7 @@ if [ -z "${GEMINI_API_KEY:-}" ]; then
   exit 1
 fi
 
-MODEL_NAME="${MODEL_NAME:-gemini-3.8-flash}"
+MODEL_NAME="${MODEL_NAME:-gemini-3.5-flash-lite}"
 MAX_RETRIES="${MAX_RETRIES:-4}"
 DELAY="${INITIAL_DELAY:-30}"
 WORK_DIR="${RUNNER_TEMP:-/tmp}/aider"

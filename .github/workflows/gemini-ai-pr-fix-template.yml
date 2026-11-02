@@ -45,7 +45,7 @@ on:
         description: '使用する Gemini モデル名（gemini/ プレフィックスは不要）'
         required: false
         type: string
-        default: 'gemini-3.8-flash'
+        default: 'gemini-3.5-flash-lite'
       test_command:
         description: '修正の検証に使うテストコマンド（Lint・ビルドと組み合わせて実行。空ならテストなし）'
         required: false

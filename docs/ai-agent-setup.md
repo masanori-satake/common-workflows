@@ -71,13 +71,20 @@ ai-coder-trigger.yml（あなたのリポジトリ）
 
 ### 使用するモデルが自分のキーで使えるか確認する（推奨）
 
-既定のモデルは `gemini-3.8-flash`（無料枠対象の Flash モデル）です。モデルによっては新規ユーザーへの
-提供が制限されることがあるため（例: `gemini-2.5-flash` 系は過去の利用者に限定）、導入前に確認しておくと安心です。
+既定のモデルは `gemini-3.5-flash-lite`（無料枠対象の Flash-Lite モデル）です。Flash 系より能力は控えめですが、
+無料枠の 1 日あたりのリクエスト数の上限が大きく（2026 年 11 月時点で Flash 系の 20 回に対し 500 回）、
+1 回の作業で何度も API を呼ぶ AI エージェントでもレートリミットに達しにくいため、既定にしています。
+モデルによっては新規ユーザーへの提供が制限されることがあるため（例: `gemini-2.5-flash` 系は過去の利用者に限定）、導入前に確認しておくと安心です。
 
-1. [Google AI Studio](https://aistudio.google.com/) を開き、画面のモデル選択欄で **Gemini 3.8 Flash** を選びます。
+1. [Google AI Studio](https://aistudio.google.com/) を開き、画面のモデル選択欄で **Gemini 3.5 Flash-Lite** を選びます。
 2. 「こんにちは」など短い文を送信し、応答が返ることを確認します。
-3. モデル選択欄に表示されない・エラーになる場合は、表示されている Flash 系モデルの
-   モデル ID（例: `gemini-3.6-flash`）を控え、[カスタマイズ](#6-カスタマイズ) の `model_name` で指定します。
+3. モデル選択欄に表示されない・エラーになる場合は、表示されているモデルの
+   モデル ID（例: `gemini-3.1-flash-lite`）を控え、[カスタマイズ](#6-カスタマイズ) の `model_name` で指定します。
+
+> ℹ️ 無料枠の上限は **Google Cloud プロジェクト単位** で、モデルごとに決まっています（API キーごとではありません）。
+> 複数のリポジトリに同じキーを登録すると、上限を共有します。現在の上限と使用量は
+> [AI Studio の Rate Limit 画面](https://aistudio.google.com/rate-limit) で確認できます。
+> 難しい修正だけ能力の高いモデル（例: `gemini-3.8-flash`。1 日 20 回）を使いたい場合は、`model_name` で指定します。
 
 ---
 
@@ -348,7 +355,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 
 | 入力 | 既定値 | 説明 |
 | :--- | :--- | :--- |
-| `model_name` | `gemini-3.8-flash` | 使用する Gemini モデル |
+| `model_name` | `gemini-3.5-flash-lite` | 使用する Gemini モデル（無料枠の上限が大きい Flash-Lite を既定にしている） |
 | `test_command` | `npm test` | 修正の検証で Lint とビルドの間に実行するテスト。空文字 `''` ではテストを実行しない。Lint・ビルドは、package.json があり `lint` / `build` スクリプトが定義されている場合にだけ実行する（`npm run --if-present`）。VS Code テンプレートは `xvfb-run --auto-servernum npm test` |
 | `max_fix_rounds` | `3` | AI による修正と検証の最大往復回数（1〜3） |
 | `target_branch` | リポジトリの既定ブランチ | 作業のベースブランチ |

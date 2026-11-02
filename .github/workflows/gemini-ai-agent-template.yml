@@ -7,7 +7,7 @@ name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
 # Studio 無料枠）でコードを修正し、変更があれば Pull Request を作成する。
 #
 # 統一パラメータ方針 (Unified Parameters Policy)
-#   - モデル            : gemini/gemini-3.8-flash
+#   - モデル            : gemini/gemini-3.5-flash-lite
 #   - Aider             : aider-chat をバージョン固定でインストール（Python 3.12）
 #   - 依存インストール  : 検証ジョブで package.json があれば lockfile 自動判定（npm ci / npm install）
 #   - 検証と再修正      : AI の修正（ai-N）と検証（verify-N: Lint → テスト → ビルド）を交互に行い、
@@ -62,7 +62,7 @@ on:
         description: '使用する Gemini モデル名（gemini/ プレフィックスは不要）'
         required: false
         type: string
-        default: 'gemini-3.8-flash'
+        default: 'gemini-3.5-flash-lite'
       test_command:
         description: '修正の検証に使うテストコマンド（Lint・ビルドと組み合わせて実行。空ならテストなし）'
         required: false
