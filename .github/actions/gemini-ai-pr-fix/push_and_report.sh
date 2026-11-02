@@ -2,7 +2,8 @@
 # 修正を PR ブランチへ push し、失敗していた CI を再実行して PR にコメントで報告する。
 #   - 公開ジョブで実行する。コミットは作業ジョブが作成し、apply_patch.sh が新しい checkout に適用済み
 #     （このスクリプトはリポジトリのコードを実行しない）
-#   - push 前に PR が Open のままで、head が処理開始時から変わっていないことを確認する
+#   - push 前に PR が Open のままで、head（SHA・ブランチ・リポジトリ）が処理開始時から変わっていないことを
+#     API で確認し、push 先と CI 再実行の --ref には API から取得した head ブランチを使う
 #   - push は git フックを無効化して行う
 #   - GITHUB_TOKEN の push では CI が起動しないため、workflow_dispatch で再実行する
 #
@@ -47,6 +48,22 @@ if [ "$(jq -r '.head.sha' <<< "$pr_json")" != "$HEAD_SHA" ]; then
   echo "::error::処理中に PR ブランチが更新されたため、push を中止しました。もう一度コマンドを実行してください。"
   exit 1
 fi
+# push 先は API から取得した現在の head だけを使う（作業ジョブの出力 HEAD_REF は照合にのみ使う）
+api_head_ref="$(jq -r '.head.ref // ""' <<< "$pr_json")"
+api_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "$pr_json")"
+if [ "$api_head_repo" != "$GITHUB_REPOSITORY" ]; then
+  echo "::error::PR の head リポジトリ（${api_head_repo:-不明}）がこのリポジトリと一致しないため、push を中止しました。"
+  exit 1
+fi
+if [ -z "$api_head_ref" ] || [ "$api_head_ref" != "$HEAD_REF" ]; then
+  echo "::error::PR の head ブランチ（${api_head_ref:-不明}）が作業時の値（${HEAD_REF}）と一致しないため、push を中止しました。"
+  exit 1
+fi
+if ! git check-ref-format --branch "$api_head_ref" > /dev/null 2>&1; then
+  echo "::error::PR の head ブランチ名が不正なため、push を中止しました。"
+  exit 1
+fi
+HEAD_REF="$api_head_ref"
 
 status "📤 PR ブランチに push 中" "\`${HEAD_REF}\` に修正コミットを push しています。"
 gh auth setup-git
