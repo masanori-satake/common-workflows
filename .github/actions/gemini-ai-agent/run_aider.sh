@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Aider を Gemini API で実行する。
-#   - 429 / ResourceExhausted を検知したら指数バックオフ（30s → 60s → 120s）で再試行
+#   - 429 / ResourceExhausted を検知したら指数バックオフ（30s → 60s → 120s）で再試行。
+#     API が待ち時間（retryDelay）を返した場合は、それより短くは待たない
+#   - 1 日あたりの上限（quotaId に PerDay を含む）や、待ち時間が長すぎる場合は再試行せずに終了し、
+#     $RUNNER_TEMP/aider/rate_limit に daily / long を書き出す（呼び出し側が通知文に使う）
 #   - TEST_COMMAND 指定時は --auto-test で修正後にテストを実行し、失敗時は AI が自己修正
 #   - TARGET_FILES 指定時はそのファイルのみをコンテキストに渡し、リポジトリマップを無効化
 #
@@ -9,7 +12,7 @@
 #
 # 入力（env）: AI_PROMPT, TARGET_FILES, GEMINI_API_KEY, MODEL_NAME, TEST_COMMAND,
 #              MAX_RETRIES, INITIAL_DELAY
-# 出力（$GITHUB_OUTPUT）: agent_status, test_status, attempts
+# 出力（$GITHUB_OUTPUT）: agent_status, test_status, attempts, rate_limit（daily / long / 空）
 set -euo pipefail
 
 : "${AI_PROMPT:?AI_PROMPT が未設定です（extract_request.sh が先に実行されている必要があります）}"
@@ -24,7 +27,11 @@ DELAY="${INITIAL_DELAY:-30}"
 WORK_DIR="${RUNNER_TEMP:-/tmp}/aider"
 LOG_FILE="${WORK_DIR}/aider_output.log"
 PROMPT_FILE="${WORK_DIR}/prompt.md"
+RATE_LIMIT_FILE="${WORK_DIR}/rate_limit"
+# API が返した待ち時間（retryDelay）がこの秒数を超える場合は、待たずに終了する
+MAX_RETRY_DELAY="${MAX_RETRY_DELAY:-300}"
 mkdir -p "$WORK_DIR"
+: > "$RATE_LIMIT_FILE"
 
 # 指示文はファイル経由で渡す（引数長制限と特殊文字の問題を避ける）
 printf '%s\n' "$AI_PROMPT" > "$PROMPT_FILE"
@@ -33,6 +40,8 @@ printf '%s\n' "$AI_PROMPT" > "$PROMPT_FILE"
 RATE_LIMIT_PATTERN='RateLimitError|RESOURCE_EXHAUSTED|ResourceExhausted|429 Too Many Requests|Too Many Requests|rate limited you'
 # 再試行しても回復しない API エラー（キー不正・モデル名誤り等）
 FATAL_PATTERN='litellm\.(AuthenticationError|PermissionDeniedError|NotFoundError|BadRequestError)|API key not valid'
+# 1 日あたりの上限（quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier など）
+DAILY_LIMIT_PATTERN='PerDay|requests per day limit'
 
 read -r -a FILES <<< "${TARGET_FILES:-}"
 
@@ -149,8 +158,26 @@ while :; do
   cp "$LOG_FILE" "${WORK_DIR}/aider_output.attempt${attempt}.log"
 
   # Aider は API エラー時も終了コード 0 を返すことがあるため、ログ内容で判定する
+  retry_delay=0
   if grep -qE "$RATE_LIMIT_PATTERN" "$LOG_FILE"; then
     echo "::warning::Gemini API のレートリミット (429) を検知しました。(Rate limit detected)"
+    # 1 日あたりの上限（例: GenerateRequestsPerDayPerProjectPerModel-FreeTier）は、
+    # 太平洋時間 0 時のリセットまで回復しないため再試行しない
+    if grep -qE "$DAILY_LIMIT_PATTERN" "$LOG_FILE"; then
+      echo "::error::Gemini API 無料枠の 1 日あたりの上限に達しました。太平洋時間 0 時（日本時間 16〜17 時）のリセット後に再実行してください。(Daily quota exceeded)"
+      echo "daily" > "$RATE_LIMIT_FILE"
+      break
+    fi
+    # API が返した待ち時間（"retryDelay": "42s" など）の最大値（秒・切り上げ）
+    retry_delay="$(awk 'match($0, /"retryDelay": *"[0-9.]+s"/) {
+        s = substr($0, RSTART, RLENGTH); gsub(/[^0-9.]/, "", s)
+        v = int(s); if (s + 0 > v) v++; if (v > m) m = v
+      } END { print m + 0 }' "$LOG_FILE")"
+    if [ "${retry_delay:-0}" -gt "$MAX_RETRY_DELAY" ]; then
+      echo "::error::Gemini API のレートリミットの解除まで ${retry_delay} 秒かかるため、再試行せずに終了します。時間をおいて再実行してください。(Retry delay too long)"
+      echo "long" > "$RATE_LIMIT_FILE"
+      break
+    fi
   elif grep -qE "$FATAL_PATTERN" "$LOG_FILE"; then
     echo "::error::Gemini API が回復不能なエラーを返しました。API キーとモデル名を確認してください。"
     break
@@ -168,9 +195,13 @@ while :; do
     break
   fi
 
-  echo "${DELAY} 秒待機して再試行します... (Backing off ${DELAY}s)"
+  wait_seconds="$DELAY"
+  if [ "${retry_delay:-0}" -gt "$wait_seconds" ]; then
+    wait_seconds="$retry_delay"
+  fi
+  echo "${wait_seconds} 秒待機して再試行します... (Backing off ${wait_seconds}s)"
   reset_worktree
-  sleep "$DELAY"
+  sleep "$wait_seconds"
   DELAY=$((DELAY * 2))
   attempt=$((attempt + 1))
 done
@@ -195,6 +226,7 @@ fi
   echo "agent_status=${agent_status}"
   echo "test_status=${test_status}"
   echo "attempts=${attempt}"
+  echo "rate_limit=$(cat "$RATE_LIMIT_FILE")"
 } >> "$GITHUB_OUTPUT"
 
 {

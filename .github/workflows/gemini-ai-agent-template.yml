@@ -221,6 +221,7 @@ jobs:
     outputs:
       changed: ${{ steps.ai.outputs.changed }}
       attempts: ${{ steps.ai.outputs.attempts }}
+      rate_limit: ${{ steps.quota.outputs.rate_limit }}
     steps:
       - uses: actions/checkout@v4
         name: 'コードのチェックアウト (Checkout Base Commit)'
@@ -242,6 +243,15 @@ jobs:
           initial_delay: ${{ inputs.initial_delay }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+      # Aider が 1 日の上限などで再試行せずに終了した場合の種別（daily / long）を公開ジョブへ渡す。
+      # 作業系ジョブの出力のため、値は既知の種別に限定する
+      - name: 'レートリミットの判定 (Detect Rate Limit)'
+        id: quota
+        if: ${{ failure() }}
+        run: |
+          kind="$(head -c 16 "$RUNNER_TEMP/aider/rate_limit" 2> /dev/null || true)"
+          case "$kind" in daily | long) ;; *) kind="" ;; esac
+          echo "rate_limit=${kind}" >> "$GITHUB_OUTPUT"
 
   verify-1:
     name: '修正の検証 1 回目 (Verify Round 1)'
@@ -282,6 +292,7 @@ jobs:
     outputs:
       changed: ${{ steps.ai.outputs.changed }}
       attempts: ${{ steps.ai.outputs.attempts }}
+      rate_limit: ${{ steps.quota.outputs.rate_limit }}
     steps:
       - uses: actions/checkout@v4
         name: 'コードのチェックアウト (Checkout Base Commit)'
@@ -303,6 +314,15 @@ jobs:
           initial_delay: ${{ inputs.initial_delay }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+      # Aider が 1 日の上限などで再試行せずに終了した場合の種別（daily / long）を公開ジョブへ渡す。
+      # 作業系ジョブの出力のため、値は既知の種別に限定する
+      - name: 'レートリミットの判定 (Detect Rate Limit)'
+        id: quota
+        if: ${{ failure() }}
+        run: |
+          kind="$(head -c 16 "$RUNNER_TEMP/aider/rate_limit" 2> /dev/null || true)"
+          case "$kind" in daily | long) ;; *) kind="" ;; esac
+          echo "rate_limit=${kind}" >> "$GITHUB_OUTPUT"
 
   verify-2:
     name: '修正の検証 2 回目 (Verify Round 2)'
@@ -343,6 +363,7 @@ jobs:
     outputs:
       changed: ${{ steps.ai.outputs.changed }}
       attempts: ${{ steps.ai.outputs.attempts }}
+      rate_limit: ${{ steps.quota.outputs.rate_limit }}
     steps:
       - uses: actions/checkout@v4
         name: 'コードのチェックアウト (Checkout Base Commit)'
@@ -364,6 +385,15 @@ jobs:
           initial_delay: ${{ inputs.initial_delay }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+      # Aider が 1 日の上限などで再試行せずに終了した場合の種別（daily / long）を公開ジョブへ渡す。
+      # 作業系ジョブの出力のため、値は既知の種別に限定する
+      - name: 'レートリミットの判定 (Detect Rate Limit)'
+        id: quota
+        if: ${{ failure() }}
+        run: |
+          kind="$(head -c 16 "$RUNNER_TEMP/aider/rate_limit" 2> /dev/null || true)"
+          case "$kind" in daily | long) ;; *) kind="" ;; esac
+          echo "rate_limit=${kind}" >> "$GITHUB_OUTPUT"
 
   verify-3:
     name: '修正の検証 3 回目 (Verify Round 3)'
@@ -450,6 +480,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RATE_LIMIT: ${{ needs.ai-1.outputs.rate_limit || needs.ai-2.outputs.rate_limit || needs.ai-3.outputs.rate_limit }}
         run: |
+          case "$RATE_LIMIT" in
+            daily) reason=$'\n\n'"Gemini API 無料枠の **1 日あたりの上限** に達したため、AI による修正を中止しました。太平洋時間 0 時（日本時間 16〜17 時）に上限がリセットされた後、\`/ai\` で始まるコメントで再実行してください。" ;;
+            long) reason=$'\n\n'"Gemini API のレートリミットの解除まで時間がかかるため、AI による修正を中止しました。しばらく時間をおいてから、\`/ai\` で始まるコメントで再実行してください。" ;;
+            *) reason="" ;;
+          esac
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --body "⚠️ Gemini AI エージェントの実行に失敗しました。詳細は [実行ログ]($RUN_URL) を確認してください。"
+            --body "⚠️ Gemini AI エージェントの実行に失敗しました。詳細は [実行ログ]($RUN_URL) を確認してください。${reason}"
