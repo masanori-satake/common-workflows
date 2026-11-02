@@ -54,11 +54,14 @@ def get_version() -> str:
     expected = os.environ.get("EXPECTED_VERSION", "")
     ref = os.environ.get("GITHUB_REF", "")
     if not expected and ref.startswith("refs/tags/v"):
-        expected = ref[len("refs/tags/v"):]
+        expected = ref[len("refs/tags/v") :]
     if expected.startswith("v"):
         expected = expected[1:]
     if expected and expected != version:
-        print(f"Error: タグのバージョン '{expected}' と {VERSION_FILE} の '{version}' が一致しません。", file=sys.stderr)
+        print(
+            f"Error: タグのバージョン '{expected}' と {VERSION_FILE} の '{version}' が一致しません。",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     return version
@@ -78,14 +81,22 @@ def create_package() -> None:
         for root, dirs, files in os.walk(SOURCE_DIR):
             # 除外ディレクトリと隠しディレクトリを枝刈り（_locales は残す）
             dirs[:] = [
-                d for d in dirs
-                if d == "_locales" or (d not in EXCLUDE_DIRS and not _is_hidden(d) and not d.startswith("_"))
+                d
+                for d in dirs
+                if d == "_locales"
+                or (
+                    d not in EXCLUDE_DIRS
+                    and not _is_hidden(d)
+                    and not d.startswith("_")
+                )
             ]
             for file in files:
                 if _is_hidden(file) or file.lower() in EXCLUDE_FILES:
                     continue
                 filepath = os.path.join(root, file)
-                arcname = os.path.relpath(filepath, SOURCE_DIR).replace(os.path.sep, "/")
+                arcname = os.path.relpath(filepath, SOURCE_DIR).replace(
+                    os.path.sep, "/"
+                )
                 arcname = RENAME_MAP.get(arcname, arcname)
                 zipf.write(filepath, arcname)
 

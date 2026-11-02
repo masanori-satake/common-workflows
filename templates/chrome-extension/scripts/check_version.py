@@ -73,12 +73,20 @@ class VersionSource:
 VERSION_SOURCES: list[VersionSource] = [
     VersionSource("package.json", "package.json", json_version(), required=True),
     VersionSource("package-lock.json", "package-lock.json", json_version()),
-    VersionSource("package-lock.json (packages[''])", "package-lock.json", lockfile_root_package_version()),
+    VersionSource(
+        "package-lock.json (packages[''])",
+        "package-lock.json",
+        lockfile_root_package_version(),
+    ),
     VersionSource("manifest.json", "projects/app/manifest.json", json_version()),
     VersionSource("version.json", "projects/app/version.json", json_version()),
     # README のバージョンバッジ（例: https://img.shields.io/badge/version-1.2.3-blue）。
     # update_version.py の README の更新パターンと揃える
-    VersionSource("README.md", "README.md", regex_version(r"img\.shields\.io/badge/version-([0-9]+\.[0-9]+\.[0-9]+)-")),
+    VersionSource(
+        "README.md",
+        "README.md",
+        regex_version(r"img\.shields\.io/badge/version-([0-9]+\.[0-9]+\.[0-9]+)-"),
+    ),
 ]
 
 
@@ -89,7 +97,9 @@ def main() -> int:
     for src in VERSION_SOURCES:
         if not os.path.exists(src.path):
             if src.required:
-                print(f"Error: 必須ファイルが見つかりません: {src.path}", file=sys.stderr)
+                print(
+                    f"Error: 必須ファイルが見つかりません: {src.path}", file=sys.stderr
+                )
                 return 1
             continue
         try:
@@ -99,7 +109,10 @@ def main() -> int:
             return 1
         if version is None:
             if src.required:
-                print(f"Error: {src.path} からバージョンを抽出できませんでした。", file=sys.stderr)
+                print(
+                    f"Error: {src.path} からバージョンを抽出できませんでした。",
+                    file=sys.stderr,
+                )
                 return 1
             continue
         found[src.label] = version
@@ -107,13 +120,25 @@ def main() -> int:
             baseline = version
 
     if baseline is None:
-        print("Error: バージョンを持つソースが1つも見つかりませんでした。", file=sys.stderr)
+        print(
+            "Error: バージョンを持つソースが1つも見つかりませんでした。",
+            file=sys.stderr,
+        )
         return 1
 
     # Chrome の manifest の制約: X.Y.Z（ASCII 数字）、各数値 0〜65535、すべて 0 は不可
-    numbers = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", baseline)
-    if not numbers or any(int(n) > 65535 for n in numbers.groups()) or all(int(n) == 0 for n in numbers.groups()):
-        print(f"Error: Chrome 拡張機能で使えないバージョンです: {baseline}", file=sys.stderr)
+    numbers = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", baseline
+    )
+    if (
+        not numbers
+        or any(int(n) > 65535 for n in numbers.groups())
+        or all(int(n) == 0 for n in numbers.groups())
+    ):
+        print(
+            f"Error: Chrome 拡張機能で使えないバージョンです: {baseline}",
+            file=sys.stderr,
+        )
         return 1
 
     print("バージョン整合性チェック (Version Consistency):")
@@ -123,7 +148,10 @@ def main() -> int:
 
     mismatches = {k: v for k, v in found.items() if v != baseline}
     if mismatches:
-        print(f"\nError: バージョン不一致を検出しました（基準: {baseline}）: {mismatches}", file=sys.stderr)
+        print(
+            f"\nError: バージョン不一致を検出しました（基準: {baseline}）: {mismatches}",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"\nすべてのバージョンが一致しています: {baseline}")
