@@ -1,0 +1,167 @@
+name: 'Gemini AI PR 修正 (Gemini AI PR Fix Shared Workflow)'
+
+# =============================================================================
+# 概要 (Overview)
+# -----------------------------------------------------------------------------
+# PR へのコメントで起動し、PR ブランチに修正コミットを push する。
+#   /ai-fix [追加の指示]   失敗した CI のログを AI（Aider + Gemini）が解析して修正する
+#   /ai-bump patch|minor   バージョンを更新する（AI は使わない。種別は人が判断する）
+#
+# 動作 (Behavior)
+#   - 対象は PR の最新コミットで失敗した CI（ワークフローごとの最新実行）
+#   - バージョンチェックの失敗は AI に直させず、/ai-bump の使い方を PR にコメントする
+#   - 修正後は Lint → テスト → ビルドで検証し、失敗すれば AI が再修正する
+#   - push 後、GITHUB_TOKEN の push では CI が起動しないため workflow_dispatch で再実行する
+#   - Issue 用エージェントと同じ状況表示（👀 リアクション + 状況コメント）を行う
+#
+# セキュリティ方針 (Security Policy)
+#   - コメント起動は author_association が allowed_associations に含まれる場合のみ
+#   - フォークからの PR は対象外（コードを書き込み権限付きで動かさない。push もできない）
+#   - GitHub トークンはリポジトリのコードを実行しないステップにのみ渡す
+#     （npm ci・Aider・テスト・update-version・git commit には渡さない。push はフック無効）
+#   - .github/workflows/ はコミットしない（GITHUB_TOKEN では push できない）
+#
+# 呼び出し側の前提 (Caller Requirements)
+#   - permissions: contents / issues / pull-requests / actions すべて write
+#   - CI の再実行には、対象ワークフローに workflow_dispatch トリガーが必要
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      model_name:
+        description: '使用する Gemini モデル名（gemini/ プレフィックスは不要）'
+        required: false
+        type: string
+        default: 'gemini-3.8-flash'
+      test_command:
+        description: '修正の検証に使うテストコマンド（Lint・ビルドと組み合わせて実行。空ならテストなし）'
+        required: false
+        type: string
+        default: 'npm test'
+      node_version:
+        description: '使用する Node.js のバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      aider_version:
+        description: 'インストールする aider-chat のバージョン（固定）'
+        required: false
+        type: string
+        default: '0.86.2'
+      max_retries:
+        description: '429 レートリミット時の最大試行回数'
+        required: false
+        type: number
+        default: 4
+      initial_delay:
+        description: 'リトライ初回の待機秒数（以降 2 倍ずつ増加）'
+        required: false
+        type: number
+        default: 30
+      allowed_associations:
+        description: 'コメント起動を許可する author_association（カンマ区切り・空白なし）'
+        required: false
+        type: string
+        default: 'OWNER,MEMBER,COLLABORATOR'
+      timeout_minutes:
+        description: 'ジョブのタイムアウト（分）'
+        required: false
+        type: number
+        default: 30
+    secrets:
+      GEMINI_API_KEY:
+        description: 'Google AI Studio の API キー（/ai-bump のみの利用でも必須）'
+        required: true
+
+jobs:
+  # 受付通知: concurrency の順番待ちの外で即座に 👀 と状況コメントを出す
+  acknowledge:
+    name: '受付通知 (Acknowledge Request)'
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.actor != 'github-actions[bot]' &&
+      !endsWith(github.actor, '[bot]') &&
+      github.event.sender.type != 'Bot' &&
+      (startsWith(github.event.comment.body, '/ai-fix') || startsWith(github.event.comment.body, '/ai-bump')) &&
+      contains(format(',{0},', inputs.allowed_associations), format(',{0},', github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    outputs:
+      comment_id: ${{ steps.ack.outputs.comment_id }}
+      reaction_id: ${{ steps.ack.outputs.reaction_id }}
+    steps:
+      - name: '受付リアクションと状況コメントの投稿 (Post Acknowledgement)'
+        id: ack
+        continue-on-error: true
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
+        with:
+          mode: ack
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  fix:
+    name: 'PR への AI 対応 (Fix CI / Bump Version)'
+    needs: acknowledge
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    # 同一 PR への操作は直列化し、待機中のリクエストも順番に処理する
+    concurrency:
+      group: gemini-ai-pr-fix-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: false
+      queue: max
+
+    steps:
+      # PR の head コミットを取得する（push は HEAD:refs/heads/<head_ref> で行う）
+      - name: 'PR ブランチのチェックアウト (Checkout PR Head)'
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          # バージョン比較のため全履歴とベースブランチを取得する
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 'Gemini AI による PR 対応 (Run AI PR Fix)'
+        id: agent
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          model_name: ${{ inputs.model_name }}
+          test_command: ${{ inputs.test_command }}
+          node_version: ${{ inputs.node_version }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
+
+      - name: '状況表示: 完了 (Status: Finished)'
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
+        with:
+          mode: finish
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
+          reaction_id: ${{ needs.acknowledge.outputs.reaction_id }}
+          result: ${{ steps.agent.outcome == 'success' && steps.agent.outputs.result || (steps.agent.outcome == 'cancelled' && 'cancelled' || 'failure') }}
+          pr_url: ${{ steps.agent.outputs.commit_url }}
+
+      # 状況コメントの書き換えでは通知が飛ばないため、失敗は新規コメントで知らせる
+      - name: '失敗時の PR 通知 (Notify Failure on PR)'
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body "⚠️ Gemini AI エージェントの実行に失敗しました。詳細は実行ログを確認してください。"$'\n\n'"- 実行ログ: ${RUN_URL}"

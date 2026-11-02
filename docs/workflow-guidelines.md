@@ -483,3 +483,25 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   同一 Issue への連続したリクエストもキャンセルされず順番に処理される。
 - `test_command`（Aider の自動テスト・最終テストの両方）には `GEMINI_API_KEY` を渡さない。
 - コメント起動時はコメントの指示を先頭に置き、`max_prompt_chars` を超える場合は背景情報の Issue 本文側を切り詰める。
+
+### 15.5 PR の CI 修正とバージョン更新（`/ai-fix` / `/ai-bump`）
+
+- 共通ワークフロー: `gemini-ai-pr-fix-template.yml`（受付ジョブ + 本体ジョブ。PR 単位で `queue: max` の直列化）
+- 共通 composite action: `.github/actions/gemini-ai-pr-fix`
+  - `resolve_request.sh` — コマンド解析と PR の検証（Open・同一リポジトリ・チェックアウト後の更新なし）
+  - `collect_ci_failures.sh` — head コミットで失敗した CI（ワークフローごとの最新実行）のログ末尾を集め、
+    ログに出てくる追跡済みファイルを対象ファイルにして指示文を組み立てる
+  - `post_guidance.sh` — バージョンチェックの失敗・失敗なしの場合に案内をコメント
+  - `bump_version.sh` — ベースブランチのバージョンを基準に `npm run update-version` を実行し、
+    CHANGELOG のプレースホルダーを PR タイトルから作った説明に置き換えて `--check-bump` で検証
+  - `push_and_report.sh` — PR が Open かつ head 不変であることを確認して push し、失敗していた CI を
+    `workflow_dispatch` で再実行して PR にコメント
+- 呼び出し側は `ai-coder-trigger.yml` の `ai-pr-fix` ジョブ（`actions: write` が必要）
+- 運用ルール:
+  - 人が作った PR も対象とする（フォークの PR は対象外）
+  - バージョンチェックの失敗は AI に直させない。人が AGENTS.md の基準で種別を判断し `/ai-bump patch|minor` で依頼する
+  - 修正の検証は CI と同じ順（Lint → テスト → ビルド）で行い、テスト・Lint ルールを弱めて通すことは禁止
+- セキュリティ:
+  - PR のコード（npm ci のライフサイクルスクリプト・Aider・テスト・update-version・git フック）を実行する
+    ステップには GitHub トークンを渡さない。コミットはトークン無しのステップで行い、push はフックを無効化する
+    （`git -c core.hooksPath=/dev/null push`）。Issue 用エージェントの `create_pr.sh` も同様にフックを無効化する

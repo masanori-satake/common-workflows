@@ -17,7 +17,7 @@ inputs:
     required: false
     default: ''
   result:
-    description: 'finish 時の結果（pr / nochange / failure / cancelled）'
+    description: 'finish 時の結果（pr / nochange / pushed / guidance / failure / cancelled）'
     required: false
     default: 'failure'
   pr_url:

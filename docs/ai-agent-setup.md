@@ -205,6 +205,47 @@ Files: src/core/renderers/TreeRenderer.ts, src/core/model/index.ts
 - 日本語や空白を含むパス、`..` を含むパスは安全のため無視されます。
 - 指定しない場合は、AI がリポジトリ全体の構造（リポジトリマップ）から対象を判断します。
 
+### 方法 C: PR の CI の失敗を直してもらう（`/ai-fix`）
+
+PR の CI（コード品質検証など）が失敗したとき、その PR に次のようにコメントします。
+AI が失敗したステップのログを読んで原因を特定し、修正コミットを **PR ブランチに直接 push** します。
+
+```text
+/ai-fix
+```
+
+```text
+/ai-fix テストの期待値ではなく実装側を直してください。
+```
+
+- 2 行目以降や `/ai-fix` の後ろに書いた文は、追加の指示として AI に渡されます。
+- 人が作った PR にも、AI が作った PR にも使えます。フォークからの PR は対象外です。
+- コメントで起動できるのは、リポジトリの **Owner / Member / Collaborator** だけです。
+- 対象は PR の最新コミットで失敗している CI です。CI がまだ実行中なら、完了を待つよう案内します。
+- 修正後は Lint → テスト → ビルドの順に検証し、失敗すれば AI が再修正します。
+- push 後、失敗していた CI を自動で再実行します。結果は PR の「Checks」で確認できます。
+- AI はテストや Lint ルールを弱めて通すことはしません。ネットワークエラーなどコード以外が原因の失敗では、
+  変更せずに「変更はありませんでした」と報告します。
+- `.github/workflows/` の誤りは修正できません（GitHub の制約で push できないため）。
+
+### 方法 D: バージョンを更新してもらう（`/ai-bump`）
+
+**バージョンチェックの失敗は AI には直させません。** 更新の種別（マイナー / パッチ）は人が判断するためです。
+`/ai-fix` でバージョンチェックの失敗が見つかると、AI は修正せずに次の案内をコメントします。
+AGENTS.md の基準で種別を決め、PR にコメントしてください。
+
+| コメント | 更新内容 | 使う場面 |
+| :--- | :--- | :--- |
+| `/ai-bump minor` | X.Y.Z → X.(Y+1).0 | 新機能の追加、既存機能の拡張、仕様変更 |
+| `/ai-bump patch` | X.Y.Z → X.Y.(Z+1) | 不具合修正、軽微な UI 調整、README などパッケージ同梱ドキュメントの更新 |
+
+- 新しいバージョンは **ベースブランチ（main）のバージョン** を基準に決めます（何度実行しても二重に上がりません）。
+- プロジェクトの `npm run update-version` で package.json / package-lock.json / README.md / CHANGELOG.md を一括更新し、
+  バージョンチェック（`--check-bump`）が通ることを確認してから push します。AI は使いません。
+- CHANGELOG.md の説明は、PR タイトルから作成します（`feat:` → 追加、`fix:` → 修正、それ以外 → 変更）。
+  必要に応じて PR ブランチ上で書き直してください。
+- バージョン更新の後もほかのチェックが失敗する場合は、改めて `/ai-fix` をコメントします。
+
 ### 良い指示の書き方
 
 | ポイント | 例 |
@@ -295,14 +336,8 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 - **必ず人間がレビューしてからマージしてください。** AI の変更は誤りを含むことがあります。
 - **バージョン更新ルール**: VSIX / ZIP に含まれるファイル（`src/`、`README.md` など）を変更すると、
   AGENTS.md の規定によりバージョン更新が必要です。AI はこのルールを自動では適用しません。
-  該当する修正を依頼する場合は、指示に次のように書き添えてください。
-
-  ```text
-  あわせて package.json / package-lock.json / README.md / CHANGELOG.md のバージョンを 1.8.1 に更新し、
-  CHANGELOG.md に変更内容を日本語で追記してください。
-
-  Files: src/xxx.ts, package.json, package-lock.json, README.md, CHANGELOG.md
-  ```
+  AI が作った PR の CI がバージョンチェックで失敗したら、種別を判断して PR に `/ai-bump patch` または
+  `/ai-bump minor` とコメントしてください（[方法 D](#方法-d-バージョンを更新してもらうai-bump)）。
 
 - **第三者の Issue にラベルを付ける前に本文を確認してください。** ラベルを付けた時点で、
   その本文を AI への指示として承認したことになります。
@@ -318,7 +353,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | 症状 | 原因と対処 |
 | :--- | :--- |
 | Actions タブに実行が現れない | `ai-coder-trigger.yml` が main にマージされていない（[ステップ 4](#ステップ-4-呼び出し側ワークフローを追加する)） |
-| 実行はあるがジョブが「Skipped」 | ラベル名が `ai-task` でない / コメントが `/ai` で始まっていない / 権限のないユーザーのコメント / PR 上のコメント |
+| 実行はあるがジョブが「Skipped」 | ラベル名が `ai-task` でない / コメントが `/ai`（PR では `/ai-fix`・`/ai-bump`）で始まっていない / 権限のないユーザーのコメント。ほかのジョブ（Issue 用と PR 用）のスキップは正常 |
 | `GEMINI_API_KEY が未設定です` | [ステップ 1](#ステップ-1-シークレット-gemini_api_key-を登録する) の名前の誤り（大文字・完全一致） |
 | `AuthenticationError` / `API key not valid` | API キーの誤り・削除済み。キーを再発行し、シークレットを Update で上書き |
 | `NotFoundError` / `no longer available to new users` | `model_name` の誤り、またはそのモデルが新規ユーザーに提供されていない。[モデルの確認](#使用するモデルが自分のキーで使えるか確認する推奨) の手順で使えるモデルを選び、`model_name` で指定 |
@@ -329,7 +364,12 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | PR で CI が動かない | GitHub の仕様。PR を Close → Reopen する |
 | 失敗時に Issue へ ⚠️ コメントが付いた | コメント内の「実行ログ」リンクからエラー内容を確認 |
 | 👀 も状況コメントも付かない | ジョブがスキップされている（上の「Skipped」の行を参照）。Actions タブで実行の有無を確認 |
-| 状況コメントが「📥 受付しました」のまま進まない | 同じ Issue の前の実行の完了待ち。Actions タブで前の実行の進み具合を確認 |
+| 状況コメントが「📥 受付しました」のまま進まない | 同じ Issue / PR の前の実行の完了待ち。Actions タブで前の実行の進み具合を確認 |
+| `/ai-fix` / `/ai-bump` に反応しない | `ai-coder-trigger.yml` が古い（`ai-pr-fix` ジョブが無い）。テンプレートの最新版に差し替える |
+| 「フォークからの PR は対象外です」 | フォークの PR は安全のため対象外。PR の作成者に修正を依頼する |
+| 「処理中に PR ブランチが更新されたため、push を中止しました」 | AI の作業中に誰かが PR に push した。もう一度コメントする |
+| `/ai-bump` で「update-version スクリプトがありません」 | package.json に `scripts.update-version` が無い。テンプレートの `scripts/update-version.js` を導入する |
+| push 後に CI が再実行されない（「再実行できませんでした」） | 対象ワークフローに `workflow_dispatch` が無い。追加するか、PR を Close → Reopen する |
 
 ---
 
