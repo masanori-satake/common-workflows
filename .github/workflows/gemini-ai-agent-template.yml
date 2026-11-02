@@ -107,6 +107,8 @@ jobs:
     # 無限ループ防止: ボット自身のイベントでは起動しない。
     # PR 上のコメント（issue_comment は PR でも発火する）は対象外。
     # `/ai-` で始まるコメント（/ai-help・/ai-fix 等）は別のワークフローのコマンドなので対象外。
+    # コメント起動は command_prefix（既定 /ai）の直後が空白・改行・終端の場合に限る
+    # （呼び出し側の startsWith は粗い絞り込みのため、/aider・/aihelp 等もここで除外する）。
     # コメント起動は信頼できる author_association に限定する（シークレット悪用防止）。
     if: >-
       github.actor != 'github-actions[bot]' &&
@@ -116,6 +118,11 @@ jobs:
         (github.event_name == 'issue_comment' &&
           !github.event.issue.pull_request &&
           !startsWith(github.event.comment.body, '/ai-') &&
+          (github.event.comment.body == inputs.command_prefix ||
+            startsWith(github.event.comment.body, format('{0} ', inputs.command_prefix)) ||
+            startsWith(github.event.comment.body, format('{0}{1}', inputs.command_prefix, fromJSON('"\n"'))) ||
+            startsWith(github.event.comment.body, format('{0}{1}', inputs.command_prefix, fromJSON('"\r"'))) ||
+            startsWith(github.event.comment.body, format('{0}{1}', inputs.command_prefix, fromJSON('"\t"')))) &&
           contains(format(',{0},', inputs.allowed_associations), format(',{0},', github.event.comment.author_association))))
     runs-on: ubuntu-latest
     timeout-minutes: 5
