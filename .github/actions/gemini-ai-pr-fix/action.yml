@@ -1,0 +1,247 @@
+name: 'Gemini AI PR 修正・作業 (Gemini AI PR Fix - Work)'
+description: 'PR コメントの /ai-fix（CI の失敗を Aider + Gemini で修正）/ /ai-bump patch|minor（バージョン更新）の作業部分を行い、結果を patch として artifact に出力する共通 composite action。読み取り権限のみのジョブで使い、push は gemini-ai-pr-publish が別ジョブで行う。PR ブランチ（refs/pull/N/head）をチェックアウト済みであること。'
+
+inputs:
+  model_name:
+    description: 'Gemini モデル名（gemini/ プレフィックスは不要）'
+    required: false
+    default: 'gemini-3.8-flash'
+  test_command:
+    description: 'テストコマンド。Lint・ビルドと組み合わせて修正の検証に使う（空ならテストなし）'
+    required: false
+    default: ''
+  node_version:
+    description: '使用する Node.js のバージョン'
+    required: false
+    default: 'lts/*'
+  aider_version:
+    description: 'aider-chat のバージョン（固定）'
+    required: false
+    default: '0.86.2'
+  python_version:
+    description: 'Aider 実行に使う Python のバージョン'
+    required: false
+    default: '3.12'
+  max_retries:
+    description: '429 レートリミット時の最大試行回数'
+    required: false
+    default: '4'
+  initial_delay:
+    description: 'リトライ初回の待機秒数（以降 2 倍ずつ増加）'
+    required: false
+    default: '30'
+  gemini_api_key:
+    description: 'Google AI Studio の API キー'
+    required: true
+  github_token:
+    description: 'PR 情報と CI ログの取得用トークン（読み取り権限のみのジョブのもの）'
+    required: true
+  patch_artifact:
+    description: '作業結果の patch を保存する artifact 名'
+    required: true
+
+# 出力の信頼度:
+#   - mode / bump_type / head_ref / head_sha / base_ref / 収集結果（action: 以下）は、PR のコードを
+#     実行する前のステップで確定するため信頼できる
+#   - attempts / test_status / new_version は PR のコード実行後のステップの値。公開ジョブ側で検証して使う
+outputs:
+  mode:
+    description: 'fix / bump'
+    value: ${{ steps.resolve.outputs.mode }}
+  bump_type:
+    description: 'patch / minor（bump のみ）'
+    value: ${{ steps.resolve.outputs.bump_type }}
+  head_ref:
+    description: 'PR のブランチ名'
+    value: ${{ steps.resolve.outputs.head_ref }}
+  head_sha:
+    description: '作業の起点にした PR の head コミット'
+    value: ${{ steps.resolve.outputs.head_sha }}
+  action:
+    description: 'patch（作業結果あり）/ guidance-version / guidance-none（AI では修正しない）'
+    value: ${{ steps.decide.outputs.action }}
+  pending_count:
+    description: '実行中の CI の件数'
+    value: ${{ steps.collect.outputs.pending_count }}
+  rerun_workflows:
+    description: 'push 後に再実行するワークフローファイル名（空白区切り）'
+    value: ${{ steps.resolve.outputs.mode == 'bump' && steps.collect.outputs.all_workflows || steps.collect.outputs.failed_workflows }}
+  verify_command:
+    description: '修正の検証コマンド'
+    value: ${{ steps.collect.outputs.verify_command }}
+  attempts:
+    description: 'Aider の試行回数（要検証）'
+    value: ${{ steps.aider.outputs.attempts }}
+  test_status:
+    description: '検証結果（passed / failed / skipped、要検証）'
+    value: ${{ steps.aider.outputs.test_status }}
+  new_version:
+    description: '更新後のバージョン（bump のみ、要検証）'
+    value: ${{ steps.bump.outputs.new_version }}
+
+runs:
+  using: 'composite'
+  steps:
+    # ---- PR のコードを実行する前の、トークンを使うステップ（読み取りのみ） ----
+    - name: 'コマンドの解析と PR の検証 (Resolve Command & Validate PR)'
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+      run: bash "$GITHUB_ACTION_PATH/resolve_request.sh"
+
+    # gh と git だけを使い、リポジトリのコードは実行しない
+    - name: '失敗した CI の収集 (Collect CI Failures)'
+      id: collect
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+        HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+        TEST_COMMAND: ${{ inputs.test_command }}
+      run: bash "$GITHUB_ACTION_PATH/collect_ci_failures.sh"
+
+    - name: '処理内容の決定 (Decide Action)'
+      id: decide
+      shell: bash
+      env:
+        MODE: ${{ steps.resolve.outputs.mode }}
+        FAILED_COUNT: ${{ steps.collect.outputs.failed_count }}
+        VERSION_CHECK_FAILED: ${{ steps.collect.outputs.version_check_failed }}
+      run: |
+        if [ "$MODE" = "fix" ] && [ "$VERSION_CHECK_FAILED" = "true" ]; then
+          action=guidance-version
+        elif [ "$MODE" = "fix" ] && [ "$FAILED_COUNT" = "0" ]; then
+          action=guidance-none
+        else
+          action=patch
+        fi
+        echo "action=${action}" >> "$GITHUB_OUTPUT"
+        echo "action=${action}"
+
+    # ---- ここから先は PR のコードを実行し得る。GitHub トークンは渡さない ----
+    - name: 'Git 作成者の設定 (Configure Git Author)'
+      if: ${{ steps.decide.outputs.action == 'patch' }}
+      shell: bash
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: 'lockfile の有無を判定 (Detect Node Project)'
+      id: node_project
+      if: ${{ steps.decide.outputs.action == 'patch' }}
+      shell: bash
+      run: |
+        if [ ! -f package.json ]; then
+          echo "kind=none" >> "$GITHUB_OUTPUT"
+        elif [ -f package-lock.json ]; then
+          echo "kind=lockfile" >> "$GITHUB_OUTPUT"
+        else
+          echo "kind=no-lockfile" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: 'Node.js環境のセットアップ (Setup Node.js)'
+      if: ${{ steps.decide.outputs.action == 'patch' && steps.node_project.outputs.kind != 'none' }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node_version }}
+        cache: ${{ steps.node_project.outputs.kind == 'lockfile' && 'npm' || '' }}
+
+    - name: '依存関係のインストール (Install Dependencies)'
+      if: ${{ steps.decide.outputs.action == 'patch' && steps.node_project.outputs.kind != 'none' }}
+      shell: bash
+      env:
+        NODE_PROJECT_KIND: ${{ steps.node_project.outputs.kind }}
+      run: |
+        if [ "$NODE_PROJECT_KIND" = "lockfile" ]; then
+          npm ci
+        else
+          # lockfile が無いリポジトリに package-lock.json を作らない（修正コミットに紛れ込むため）
+          npm install --no-package-lock
+        fi
+
+    # ---- /ai-fix: AI による修正 ----
+    - name: 'Python環境のセットアップ (Setup Python)'
+      if: ${{ steps.resolve.outputs.mode == 'fix' && steps.decide.outputs.action == 'patch' }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: 'Aider のインストール (Install Aider)'
+      if: ${{ steps.resolve.outputs.mode == 'fix' && steps.decide.outputs.action == 'patch' }}
+      shell: bash
+      env:
+        AIDER_VERSION: ${{ inputs.aider_version }}
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "aider-chat==${AIDER_VERSION}"
+        aider --version
+        bash "$GITHUB_ACTION_PATH/../gemini-ai-agent/ensure_aiderignore.sh"
+
+    - name: 'Aider による修正 (Run Aider to Fix CI)'
+      id: aider
+      if: ${{ steps.resolve.outputs.mode == 'fix' && steps.decide.outputs.action == 'patch' }}
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        MODEL_NAME: ${{ inputs.model_name }}
+        TEST_COMMAND: ${{ steps.collect.outputs.verify_command }}
+        MAX_RETRIES: ${{ inputs.max_retries }}
+        INITIAL_DELAY: ${{ inputs.initial_delay }}
+      run: bash "$GITHUB_ACTION_PATH/../gemini-ai-agent/run_aider.sh"
+
+    - name: 'Aider ログの保存 (Upload Aider Logs)'
+      if: ${{ always() && steps.aider.outcome != 'skipped' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: aider-logs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/aider/
+        retention-days: 7
+        if-no-files-found: ignore
+
+    - name: '修正のコミット (Commit Fix)'
+      if: ${{ steps.aider.outcome == 'success' }}
+      shell: bash
+      env:
+        MODEL_NAME: ${{ inputs.model_name }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+      run: |
+        pathspec=(-- . ':(exclude).aider*' ':(exclude).github/workflows')
+        if [ -n "$(git status --porcelain "${pathspec[@]}")" ]; then
+          git add -A "${pathspec[@]}"
+          git commit -q -m "fix: CI の失敗を修正 (Gemini)" \
+            -m "Generated by Aider with gemini/${MODEL_NAME}. Refs #${PR_NUMBER}"
+        fi
+
+    # ---- /ai-bump: バージョン更新（AI は使わない） ----
+    - name: 'バージョンの更新 (Bump Version)'
+      id: bump
+      if: ${{ steps.resolve.outputs.mode == 'bump' }}
+      shell: bash
+      env:
+        BUMP_TYPE: ${{ steps.resolve.outputs.bump_type }}
+        BASE_REF: ${{ steps.resolve.outputs.base_ref }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+      run: bash "$GITHUB_ACTION_PATH/bump_version.sh"
+
+    # ---- 作業結果を patch として出力（公開ジョブが新しい checkout に適用する） ----
+    - name: '作業結果の patch 出力 (Export Patch)'
+      if: ${{ steps.aider.outcome == 'success' || steps.bump.outcome == 'success' }}
+      shell: bash
+      env:
+        HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/ai-patch"
+        git format-patch --binary --stdout "${HEAD_SHA}..HEAD" > "$RUNNER_TEMP/ai-patch/changes.patch"
+        echo "patch: $(git rev-list --count "${HEAD_SHA}..HEAD") commit(s), $(wc -c < "$RUNNER_TEMP/ai-patch/changes.patch") bytes"
+
+    - name: 'patch の保存 (Upload Patch)'
+      if: ${{ steps.aider.outcome == 'success' || steps.bump.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.patch_artifact }}
+        path: ${{ runner.temp }}/ai-patch/changes.patch
+        retention-days: 1
+        if-no-files-found: error

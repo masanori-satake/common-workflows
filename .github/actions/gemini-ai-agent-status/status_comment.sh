@@ -7,7 +7,7 @@
 # 使い方:
 #   status_comment.sh ack                         受付（リアクション + 状況コメント作成）
 #   status_comment.sh update <見出し> [詳細]      状況コメントの書き換え
-#   status_comment.sh finish <pr|nochange|failure|cancelled> [PR URL]
+#   status_comment.sh finish <pr|nochange|pushed|guidance|failure|cancelled> [URL]
 #
 # 入力（env）: GITHUB_REPOSITORY, ISSUE_NUMBER, EVENT_NAME, TRIGGER_COMMENT_ID,
 #              STATUS_COMMENT_ID, REACTION_ID, RUN_URL,
@@ -108,6 +108,14 @@ case "$MODE" in
         ;;
       nochange)
         update_comment "ℹ️ 完了: 変更はありませんでした" "指示が曖昧な場合や対象ファイルが除外された場合に起こります。実行ログの Summary を確認してください。"
+        reaction="rocket"
+        ;;
+      pushed)
+        update_comment "✅ 完了: PR ブランチに push しました" "${pr_url}"
+        reaction="rocket"
+        ;;
+      guidance)
+        update_comment "ℹ️ 完了: 対応方法をコメントしました" "AI では修正しませんでした。この下のコメントを確認してください。"
         reaction="rocket"
         ;;
       cancelled)

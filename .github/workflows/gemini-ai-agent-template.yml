@@ -187,7 +187,8 @@ jobs:
             npm ci
           else
             echo "package-lock.json が存在しないため npm install を使用します。"
-            npm install
+            # lockfile が無いリポジトリに package-lock.json を作らない（AI の PR に紛れ込むため）
+            npm install --no-package-lock
           fi
 
       - name: 'Gemini AI エージェントの実行 (Run Aider Agent & Create PR)'

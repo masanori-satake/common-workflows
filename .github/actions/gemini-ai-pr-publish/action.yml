@@ -1,0 +1,164 @@
+name: 'Gemini AI PR 修正・公開 (Gemini AI PR Fix - Publish)'
+description: 'gemini-ai-pr-fix（作業ジョブ）の結果を検証し、patch を PR ブランチへ push して CI を再実行・報告する共通 composite action。PR のコードは一切実行しない。PR の head（refs/pull/N/head）を新しくチェックアウトしたジョブで使う。'
+
+inputs:
+  mode:
+    description: '作業ジョブの mode（fix / bump）'
+    required: true
+  bump_type:
+    description: '作業ジョブの bump_type'
+    required: false
+    default: ''
+  head_ref:
+    description: '作業ジョブの head_ref'
+    required: true
+  head_sha:
+    description: '作業ジョブの head_sha（作業の起点）'
+    required: true
+  work_action:
+    description: '作業ジョブの action（patch / guidance-version / guidance-none）'
+    required: true
+  pending_count:
+    description: '作業ジョブの pending_count'
+    required: false
+    default: '0'
+  rerun_workflows:
+    description: '作業ジョブの rerun_workflows（要検証）'
+    required: false
+    default: ''
+  verify_command:
+    description: '作業ジョブの verify_command'
+    required: false
+    default: ''
+  attempts:
+    description: '作業ジョブの attempts（要検証）'
+    required: false
+    default: ''
+  test_status:
+    description: '作業ジョブの test_status（要検証）'
+    required: false
+    default: ''
+  new_version:
+    description: '作業ジョブの new_version（要検証）'
+    required: false
+    default: ''
+  model_name:
+    description: 'Gemini モデル名（報告用）'
+    required: false
+    default: 'gemini-3.8-flash'
+  patch_artifact:
+    description: '作業結果の patch の artifact 名'
+    required: true
+  github_token:
+    description: 'push・PR コメント・CI 再実行用トークン'
+    required: true
+  status_comment_id:
+    description: '状況コメントの ID（空なら状況更新しない）'
+    required: false
+    default: ''
+
+outputs:
+  result:
+    description: '結果（pushed / nochange / guidance）'
+    value: ${{ steps.guidance.outcome == 'success' && 'guidance' || steps.push.outputs.result }}
+  commit_url:
+    description: 'push したコミットの URL（push しなかった場合は空）'
+    value: ${{ steps.push.outputs.commit_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    # ---- AI では修正しない場合は案内のみ ----
+    - name: '対応方法の案内 (Post Guidance)'
+      id: guidance
+      if: ${{ startsWith(inputs.work_action, 'guidance-') }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+        REASON: ${{ inputs.work_action == 'guidance-version' && 'version' || 'none' }}
+        PENDING_COUNT: ${{ inputs.pending_count }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: bash "$GITHUB_ACTION_PATH/../gemini-ai-pr-fix/post_guidance.sh"
+
+    # ---- 作業結果の検証と適用 ----
+    - name: 'patch の取得 (Download Patch)'
+      if: ${{ inputs.work_action == 'patch' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.patch_artifact }}
+        path: ${{ runner.temp }}/ai-patch
+
+    - name: 'Git 作成者の設定 (Configure Git Author)'
+      if: ${{ inputs.work_action == 'patch' }}
+      shell: bash
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: '作業結果の検証と適用 (Validate & Apply Patch)'
+      id: apply
+      if: ${{ inputs.work_action == 'patch' }}
+      shell: bash
+      env:
+        PATCH_FILE: ${{ runner.temp }}/ai-patch/changes.patch
+        HEAD_SHA: ${{ inputs.head_sha }}
+        MODE: ${{ inputs.mode }}
+        ATTEMPTS: ${{ inputs.attempts }}
+        TEST_STATUS: ${{ inputs.test_status }}
+        NEW_VERSION: ${{ inputs.new_version }}
+        RERUN_WORKFLOWS: ${{ inputs.rerun_workflows }}
+        VERIFY_COMMAND: ${{ inputs.verify_command }}
+      run: bash "$GITHUB_ACTION_PATH/apply_patch.sh"
+
+    - name: '状況表示: 作業完了 (Status: Work Finished)'
+      if: ${{ inputs.work_action == 'patch' }}
+      shell: bash
+      env:
+        STATUS_GH_TOKEN: ${{ inputs.github_token }}
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        MODE: ${{ inputs.mode }}
+        BUMP_TYPE: ${{ inputs.bump_type }}
+        ATTEMPTS: ${{ steps.apply.outputs.attempts }}
+        TEST_STATUS: ${{ steps.apply.outputs.test_status }}
+        NEW_VERSION: ${{ steps.apply.outputs.new_version }}
+      run: |
+        if [ "$MODE" = "bump" ]; then
+          headline="🔢 バージョンの更新が完了しました（${BUMP_TYPE} → ${NEW_VERSION:-?}）"
+        else
+          case "$TEST_STATUS" in
+            passed) test_label="✅ 成功" ;;
+            failed) test_label="❌ 失敗" ;;
+            *) test_label="⏭️ 未実行" ;;
+          esac
+          retries=$(( ${ATTEMPTS:-1} - 1 ))
+          # 経過（History）には見出しだけが残るため、試行回数と検証結果は見出しに含める
+          headline="🔍 AI の作業が完了しました（試行 ${ATTEMPTS:-?} 回・再試行 ${retries} 回・検証: ${test_label}）"
+        fi
+        bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update "$headline"
+
+    # ---- push と報告（リポジトリのコードは実行しない。push はフックを無効化） ----
+    - name: 'PR ブランチへの push と CI 再実行 (Push & Re-run CI)'
+      id: push
+      if: ${{ inputs.work_action == 'patch' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        MODE: ${{ inputs.mode }}
+        PR_NUMBER: ${{ github.event.issue.number }}
+        HEAD_REF: ${{ inputs.head_ref }}
+        HEAD_SHA: ${{ inputs.head_sha }}
+        RERUN_WORKFLOWS: ${{ steps.apply.outputs.rerun_workflows }}
+        MODEL_NAME: ${{ inputs.model_name }}
+        TEST_STATUS: ${{ steps.apply.outputs.test_status }}
+        ATTEMPTS: ${{ steps.apply.outputs.attempts }}
+        VERIFY_COMMAND: ${{ steps.apply.outputs.verify_command }}
+        NEW_VERSION: ${{ steps.apply.outputs.new_version }}
+        BUMP_TYPE: ${{ inputs.bump_type }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        STATUS_SCRIPT: ${{ github.action_path }}/../gemini-ai-agent-status/status_comment.sh
+        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
+        ISSUE_NUMBER: ${{ github.event.issue.number }}
+      run: bash "$GITHUB_ACTION_PATH/../gemini-ai-pr-fix/push_and_report.sh"

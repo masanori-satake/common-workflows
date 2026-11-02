@@ -483,3 +483,37 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   同一 Issue への連続したリクエストもキャンセルされず順番に処理される。
 - `test_command`（Aider の自動テスト・最終テストの両方）には `GEMINI_API_KEY` を渡さない。
 - コメント起動時はコメントの指示を先頭に置き、`max_prompt_chars` を超える場合は背景情報の Issue 本文側を切り詰める。
+
+### 15.5 PR の CI 修正とバージョン更新（`/ai-fix` / `/ai-bump`）
+
+- 共通ワークフロー: `gemini-ai-pr-fix-template.yml`
+  - `acknowledge`（受付通知。`issues` / `pull-requests: write`）
+  - `work`（作業ジョブ。`contents` / `actions` / `pull-requests: read` のみ。PR 単位で `queue: max` の直列化）
+  - `publish`（公開ジョブ。書き込み権限を持つ。新しく checkout し直し、PR のコードは実行しない）
+- 作業ジョブ用 composite action: `.github/actions/gemini-ai-pr-fix`（結果を `git format-patch` の patch として artifact に出力）
+  - `resolve_request.sh` — コマンド解析と PR の検証（Open・同一リポジトリ・チェックアウト後の更新なし）
+  - `collect_ci_failures.sh` — head コミットで失敗した CI（ワークフローごとの最新実行）のログ末尾を集め、
+    ログに出てくる追跡済みファイルを対象ファイルにして指示文を組み立てる
+  - `bump_version.sh` — ベースブランチのバージョンを基準に `npm run update-version` を実行し、
+    CHANGELOG のプレースホルダーを PR タイトルから作った説明に置き換えて `--check-bump` で検証
+- 公開ジョブ用 composite action: `.github/actions/gemini-ai-pr-publish`
+  - `apply_patch.sh` — 作業ジョブの出力を検証し、patch を `git -c core.hooksPath=/dev/null am` で適用。
+    `.github/workflows/` の変更を含む patch は拒否
+  - `post_guidance.sh`（`gemini-ai-pr-fix` 内）— バージョンチェックの失敗・失敗なしの場合に案内をコメント
+  - `push_and_report.sh`（`gemini-ai-pr-fix` 内）— PR が Open かつ head 不変であることを確認して push し、
+    失敗していた CI を `workflow_dispatch` で再実行して PR にコメント
+- 呼び出し側は `ai-coder-trigger.yml` の `ai-pr-fix` ジョブ（`actions: write` が必要）
+- 運用ルール:
+  - 人が作った PR も対象とする（フォークの PR は対象外）
+  - バージョンチェックの失敗は AI に直させない。人が AGENTS.md の基準で種別を判断し `/ai-bump patch|minor` で依頼する
+  - 修正の検証は CI と同じ順（Lint → テスト → ビルド）で行い、テスト・Lint ルールを弱めて通すことは禁止
+  - lockfile が無いリポジトリでは `npm install --no-package-lock` を使い、`package-lock.json` を作らない
+- セキュリティ:
+  - PR のコード（npm ci のライフサイクルスクリプト・Aider・テスト・update-version）は、`GITHUB_ENV` / `GITHUB_PATH`
+    （`BASH_ENV` 等）・`.git/config`（`core.fsmonitor` 等）・同じジョブのプロセスのメモリ（ホストランナーは sudo 可）を
+    通じて後続ステップに影響し得る。そのため PR のコードは読み取り権限のみの作業ジョブで実行し、書き込み権限は
+    別ランナーの公開ジョブにだけ与える。公開ジョブは PR のコードを実行せず、作業ジョブの出力（試行回数・バージョン等）と
+    patch を検証してから使う。その代わり、作業中は状況コメントを更新できない（受付ジョブが「作業ジョブで処理中」と表示する）
+  - Issue 用エージェント（`gemini-ai-agent-template.yml`）は、既定ブランチのコードと AI の変更を同じジョブで実行して
+    PR を作成している（`create_pr.sh` は commit / push でフックを無効化しているが、上記の他の経路は残る）。
+    同じジョブ分離の適用は今後の課題
