@@ -486,22 +486,41 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 
 ### 15.5 PR の CI 修正とバージョン更新（`/ai-fix` / `/ai-bump`）
 
-- 共通ワークフロー: `gemini-ai-pr-fix-template.yml`
-  - `acknowledge`（受付通知。`issues` / `pull-requests: write`）
-  - `work`（作業ジョブ。`contents` / `actions` / `pull-requests: read` のみ。PR 単位で `queue: max` の直列化）
-  - `publish`（公開ジョブ。書き込み権限を持つ。新しく checkout し直し、PR のコードは実行しない）
-- 作業ジョブ用 composite action: `.github/actions/gemini-ai-pr-fix`（結果を `git format-patch` の patch として artifact に出力）
+- 共通ワークフロー: `gemini-ai-pr-fix-template.yml`。ジョブごとに実行境界を分ける
+
+  | ジョブ | GitHub トークン | Gemini キー | PR のコード実行 | 内容 |
+  | :--- | :--- | :--- | :--- | :--- |
+  | `acknowledge` | issues / PR 書込 | なし | しない | 受付通知 |
+  | `prepare` | 読み取りのみ | なし | しない | PR 情報・CI ログの収集、指示文の作成（このジョブだけを PR 単位で `queue: max` の直列化） |
+  | `ai-1`〜`ai-3` | なし | あり | しない | Aider で修正（テストなし、リポジトリの `.env` / `.aider*` 設定は退避） |
+  | `verify-1`〜`verify-3` | なし | なし | する | `npm ci` と Lint → テスト → ビルド |
+  | `bump` | なし | なし | する | `update-version` によるバージョン更新 |
+  | `publish` | 書き込み | なし | しない | 結果を検証し、patch を適用して push・報告 |
+
+  - `ai-N` と `verify-N` を交互に行い、検証が失敗したらそのログを次の回の AI に渡す（最大 `max_fix_rounds` 回、上限 3）
+  - ジョブ間は artifact（指示文・累積の patch・検証ログ）で受け渡す
+  - 同一 PR への依頼で順番待ちするのは `prepare` だけで、前の処理の完了は待たない（Issue 用エージェントは
+    ジョブ全体を Issue 単位で直列化する点が異なる）。並行した場合、後から終わった `publish` は head の照合で
+    push を中止する。処理全体の直列化はしない
+  - コマンドの境界（`/ai-fixx`・`/ai-bump major` 等を除外）は `.github/actions/gemini-ai-command/command_lib.sh`
+    の 1 か所で定義し、`acknowledge` の最初のステップ・`resolve_request.sh`・`post_help.sh` が共通で使う。
+    ワークフローの `if`（`startsWith`）は粗い絞り込みにとどめる
+- 作業系 composite action: `.github/actions/gemini-ai-pr-fix`（`stage: prepare / ai / verify / bump`）
   - `resolve_request.sh` — コマンド解析と PR の検証（Open・同一リポジトリ・チェックアウト後の更新なし）
   - `collect_ci_failures.sh` — head コミットで失敗した CI（ワークフローごとの最新実行）のログ末尾を集め、
     ログに出てくる追跡済みファイルを対象ファイルにして指示文を組み立てる
+  - `build_round_prompt.sh` — 2 回目以降は前回の検証ログと、前回までに変更したファイルを指示文・対象ファイルに加える
+  - `run_verify.sh` — 依存関係のインストール（`npm ci` 等）と検証コマンドを実行し、結果（passed / failed）とログ末尾を
+    出力（インストールの失敗も検証の失敗として扱い、ジョブの失敗にはしない）
   - `bump_version.sh` — ベースブランチのバージョンを基準に `npm run update-version` を実行し、
     CHANGELOG のプレースホルダーを PR タイトルから作った説明に置き換えて `--check-bump` で検証
-- 公開ジョブ用 composite action: `.github/actions/gemini-ai-pr-publish`
-  - `apply_patch.sh` — 作業ジョブの出力を検証し、patch を `git -c core.hooksPath=/dev/null am` で適用。
+- 公開用 composite action: `.github/actions/gemini-ai-pr-publish`
+  - `select_result.sh` — 変更を作った最後の回の累積 patch とその回の検証結果（`/ai-bump` は bump の patch）を選ぶ
+  - `apply_patch.sh` — 作業系ジョブの出力を検証し、patch を `git -c core.hooksPath=/dev/null am` で適用。
     `.github/workflows/` の変更を含む patch は拒否
   - `post_guidance.sh`（`gemini-ai-pr-fix` 内）— バージョンチェックの失敗・失敗なしの場合に案内をコメント
-  - `push_and_report.sh`（`gemini-ai-pr-fix` 内）— PR が Open かつ head 不変であることを確認して push し、
-    失敗していた CI を `workflow_dispatch` で再実行して PR にコメント
+  - `push_and_report.sh`（`gemini-ai-pr-fix` 内）— PR が Open で head（SHA・ブランチ・リポジトリ）が不変であることを
+    API で確認して push し、完了済みの全ワークフローを `workflow_dispatch` で再実行して PR にコメント
 - 呼び出し側は `ai-coder-trigger.yml` の `ai-pr-fix` ジョブ（`actions: write` が必要）
 - 運用ルール:
   - 人が作った PR も対象とする（フォークの PR は対象外）
@@ -509,11 +528,32 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   - 修正の検証は CI と同じ順（Lint → テスト → ビルド）で行い、テスト・Lint ルールを弱めて通すことは禁止
   - lockfile が無いリポジトリでは `npm install --no-package-lock` を使い、`package-lock.json` を作らない
 - セキュリティ:
-  - PR のコード（npm ci のライフサイクルスクリプト・Aider・テスト・update-version）は、`GITHUB_ENV` / `GITHUB_PATH`
-    （`BASH_ENV` 等）・`.git/config`（`core.fsmonitor` 等）・同じジョブのプロセスのメモリ（ホストランナーは sudo 可）を
-    通じて後続ステップに影響し得る。そのため PR のコードは読み取り権限のみの作業ジョブで実行し、書き込み権限は
-    別ランナーの公開ジョブにだけ与える。公開ジョブは PR のコードを実行せず、作業ジョブの出力（試行回数・バージョン等）と
-    patch を検証してから使う。その代わり、作業中は状況コメントを更新できない（受付ジョブが「作業ジョブで処理中」と表示する）
+  - PR のコード（依存パッケージの npm ci ライフサイクルスクリプト・テスト・update-version）は、`GITHUB_ENV` /
+    `GITHUB_PATH`（`BASH_ENV` 等）・`.git/config`（`core.fsmonitor` 等）・同じジョブのプロセスのメモリ
+    （ホストランナーは sudo 可）を通じて同じジョブの後続ステップに影響し得る。そのため GitHub の書き込みトークンと
+    Gemini API キーは、PR のコードを実行しない別ジョブ（別ランナー）にだけ渡す
+  - Aider は git ルートの `.aider.conf.yml` / `.env` / `.aider.model.settings.yml` / `.aider.model.metadata.json` を
+    自動で読み込む（`.env` は `--env-file` を指定しても読み込まれる）。PR に置くだけで API の送信先等を変えられるため、
+    `run_aider.sh` は実行中これらを退避し、空の `--config` / `--env-file` を指定する（Issue 用エージェントも同様）
+  - PR のコードを実行するジョブ（`verify` / `bump`）では npm キャッシュを使わない。`issue_comment` で起動した
+    ワークフローのキャッシュは既定ブランチのスコープに保存され、リリース等の他のワークフローからも復元されるため、
+    細工された依存パッケージが混入し得る
+  - 公開ジョブは作業系ジョブの出力（修正回数・検証結果・バージョン等）と patch を検証してから使う。
+    その代わり、作業中は状況コメントを更新できない（受付ジョブが「作業ジョブで処理中」と表示する）
   - Issue 用エージェント（`gemini-ai-agent-template.yml`）は、既定ブランチのコードと AI の変更を同じジョブで実行して
     PR を作成している（`create_pr.sh` は commit / push でフックを無効化しているが、上記の他の経路は残る）。
     同じジョブ分離の適用は今後の課題
+
+### 15.6 ヘルプコマンド（`/ai-help`）
+
+- 共通ワークフロー: `gemini-ai-help-template.yml`（`issues` / `pull-requests: write`。リポジトリのコードはチェックアウトも実行もしない）
+- 共通 composite action: `.github/actions/gemini-ai-help`（`post_help.sh` がヘルプ本文を組み立ててコメント）
+- 呼び出し側は `ai-coder-trigger.yml` の `ai-help` ジョブ。`/ai-` で始まるコメントすべてで起動し、
+  `post_help.sh` が共通の定義（`gemini-ai-command/command_lib.sh`）で判定する
+  - PR での有効な `/ai-fix`・`/ai-bump patch|minor`: 修正ワークフローが処理するため何もしない
+  - `/ai-help`: ヘルプを表示（Issue / PR に応じて表示順を変える）
+  - Issue での `/ai-fix`・`/ai-bump`: PR でのみ使えることを案内
+  - PR での種別なし・不正な `/ai-bump`: `patch` / `minor` の指定を案内
+  - そのほかの `/ai-xxx`（`/ai-fixx` 等）: 解釈できなかったことを伝えてヘルプを表示（コマンド名は安全な文字だけ・30 文字までに切り詰めて表示）
+- Issue 用エージェントは `/ai-` で始まるコメントでは起動しない（`/ai` と `/ai-xxx` の衝突防止。呼び出し側と共通ワークフローの両方で除外）
+- コマンドや運用ルールを追加・変更したら、`post_help.sh` のヘルプ本文と導入ガイドも更新する

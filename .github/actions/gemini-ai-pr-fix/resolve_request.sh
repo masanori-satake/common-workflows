@@ -14,25 +14,28 @@ set -euo pipefail
 : "${GH_TOKEN:?GH_TOKEN が未設定です}"
 : "${PR_NUMBER:?PR_NUMBER が未設定です}"
 
-body="${COMMENT_BODY//$'\r'/}"
-first_line="${body%%$'\n'*}"
-rest=""
-[[ "$body" == *$'\n'* ]] && rest="${body#*$'\n'}"
+# コマンドの判定は共通の定義（gemini-ai-command/command_lib.sh）を使う
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/../gemini-ai-command/command_lib.sh"
+classify_ai_command "${COMMENT_BODY:-}"
 
 mode=""
 bump_type=""
 instruction=""
-if [[ "$first_line" =~ ^/ai-fix([[:space:]]+(.*))?$ ]]; then
-  mode="fix"
-  instruction="${BASH_REMATCH[2]:-}"
-  [ -n "$rest" ] && instruction="${instruction:+${instruction}$'\n'}${rest}"
-elif [[ "$first_line" =~ ^/ai-bump[[:space:]]+(patch|minor)[[:space:]]*$ ]]; then
-  mode="bump"
-  bump_type="${BASH_REMATCH[1]}"
-else
-  echo "::error::コマンドを解釈できません。'/ai-fix [指示]' または '/ai-bump patch|minor' を使用してください。"
-  exit 1
-fi
+case "$AI_CMD_KIND" in
+  fix)
+    mode="fix"
+    instruction="$AI_CMD_INSTRUCTION"
+    ;;
+  bump)
+    mode="bump"
+    bump_type="$AI_CMD_BUMP_TYPE"
+    ;;
+  *)
+    echo "::error::コマンドを解釈できません。'/ai-fix [指示]' または '/ai-bump patch|minor' を使用してください。"
+    exit 1
+    ;;
+esac
 
 pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
 state="$(jq -r '.state' <<< "$pr_json")"

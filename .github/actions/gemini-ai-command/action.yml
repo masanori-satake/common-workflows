@@ -1,0 +1,26 @@
+name: 'Gemini AI コマンドの判定 (Classify Gemini AI Command)'
+description: 'Issue / PR コメントの `/ai-` コマンドを判定する共通 composite action。判定の定義は command_lib.sh の 1 か所にまとめ、修正ワークフローとヘルプで同じ境界を使う。'
+
+outputs:
+  kind:
+    description: 'fix / bump / help / unknown / none'
+    value: ${{ steps.classify.outputs.kind }}
+  bump_type:
+    description: 'bump の場合の patch / minor'
+    value: ${{ steps.classify.outputs.bump_type }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'コマンドの判定 (Classify Command)'
+      id: classify
+      shell: bash
+      env:
+        COMMENT_BODY: ${{ github.event.comment.body }}
+      run: |
+        # shellcheck source=/dev/null
+        source "$GITHUB_ACTION_PATH/command_lib.sh"
+        classify_ai_command "${COMMENT_BODY:-}"
+        echo "kind=${AI_CMD_KIND}" >> "$GITHUB_OUTPUT"
+        echo "bump_type=${AI_CMD_BUMP_TYPE}" >> "$GITHUB_OUTPUT"
+        echo "kind=${AI_CMD_KIND} bump_type=${AI_CMD_BUMP_TYPE}"
