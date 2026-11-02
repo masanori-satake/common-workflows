@@ -37,7 +37,11 @@
 `check_version.py` の `VERSION_SOURCES` と同じファイルを、`JSON_TARGETS` / `TEXT_TARGETS` に列挙します。
 - トップレベルの `"version"` を持つ JSON → `JsonTarget("path")`（`package-lock.json` は `lockfile=True`）
 - README バッジ・Service Worker のキャッシュ名などのテキスト → `TextTarget("path", r"(前置部)(\d+\.\d+\.\d+)(後置部)")`
+- `check_version.py` が必須として検証するファイル（無いと失敗するもの）は `required=True` にします。
 - 書式（インデント・改行コード）は保ったまま、バージョン部分だけを置き換えます。
+- すべての対象を確認してから書き込みます。必須の対象が無い・更新できない場合は、どのファイルも変更せずに失敗します。
+- バージョンは X.Y.Z（ASCII 数字）で、Chrome の manifest の制約（各数値 0〜65535、すべて 0 は不可）を満たす必要があります。
+  `check_version.py` も同じ制約を検証します。
 
 バージョンの更新方法は VS Code 拡張機能と揃えています（`npm run update-version -- <X.Y.Z>`、PR では `/ai-bump patch|minor`）。
 

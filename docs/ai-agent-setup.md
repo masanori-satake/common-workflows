@@ -391,7 +391,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | Issue に `/ai-help` などとコメントしたら AI が作業を始めた | `ai-coder-trigger.yml` が古い（`/ai-` で始まるコメントを除外していない）。テンプレートの最新版に差し替える |
 | 「フォークからの PR は対象外です」 | フォークの PR は安全のため対象外。PR の作成者に修正を依頼する |
 | 「処理中に PR ブランチが更新されたため、push を中止しました」 | AI の作業中に誰かが PR に push した。もう一度コメントする |
-| `/ai-bump` で「update-version スクリプトがありません」 | package.json に `scripts.update-version` が無い。テンプレートのスクリプト（VS Code: `scripts/update-version.js`、Chrome: `scripts/update_version.py`）を導入し、`scripts.update-version` に登録する |
+| `/ai-bump` で「update-version スクリプトがありません」 | package.json の `scripts.update-version` と `scripts/update-version.js` の両方が無い。テンプレートのスクリプト（VS Code: `scripts/update-version.js`、Chrome: `scripts/update_version.py`）を導入し、`scripts.update-version` に登録する |
 | push 後に CI が再実行されない（「再実行できませんでした」） | 対象ワークフローに `workflow_dispatch` が無い。追加するか、PR を Close → Reopen する |
 
 ---
