@@ -1,34 +1,29 @@
 name: 'Gemini AI エージェント (Gemini AI Agent)'
-description: 'Issue / コメントの指示文を Aider + Gemini API で実行し、変更があれば PR を作成する共通 composite action。429 の指数バックオフ再試行と自動テストによる自己修正を含む。'
+description: 'Issue / コメントの指示文から AI（Aider + Gemini）で修正し、PR を作成する共通 composite action の Issue 固有部分。実行境界ごとのステージ（prepare / publish）で使う。AI による修正（ai）と検証（verify）は gemini-ai-pr-fix の同名ステージを使う。'
 
+# ステージと実行境界（gemini-ai-agent-template.yml のジョブ構成）:
+#   prepare : 指示文と対象ファイルを抽出し、検証コマンドを決める。読み取りトークンのみ。リポジトリのコードは実行しない
+#   publish : 作業結果（patch）を検証してブランチに push し、PR を作成して Issue に報告する。
+#             書き込みトークンを持つ。リポジトリのコードは実行しない（patch 適用・commit・push はフックを無効化）
 inputs:
+  stage:
+    description: 'prepare / publish'
+    required: true
   base_branch:
     description: 'PR のベースブランチ'
     required: true
+  base_sha:
+    description: 'publish: 作業の起点にしたベースブランチのコミット（prepare の出力を渡す）'
+    required: false
+    default: ''
   model_name:
-    description: 'Gemini モデル名（gemini/ プレフィックスは不要）'
+    description: 'Gemini モデル名（報告用。gemini/ プレフィックスは不要）'
     required: false
     default: 'gemini-3.8-flash'
   test_command:
-    description: 'Aider の自動テストコマンド（空なら自動テスト無効）'
+    description: 'prepare: テストコマンド。Lint・ビルドと組み合わせて修正の検証に使う（空ならテストなし）'
     required: false
     default: ''
-  aider_version:
-    description: 'aider-chat のバージョン（固定）'
-    required: false
-    default: '0.86.2'
-  python_version:
-    description: 'Aider 実行に使う Python のバージョン（aider-chat は 3.10〜3.12 対応）'
-    required: false
-    default: '3.12'
-  max_retries:
-    description: '429 レートリミット時の最大試行回数'
-    required: false
-    default: '4'
-  initial_delay:
-    description: 'リトライ初回の待機秒数（以降 2 倍ずつ増加）'
-    required: false
-    default: '30'
   command_prefix:
     description: 'コメント起動のコマンドプレフィックス（指示文から除去される）'
     required: false
@@ -41,24 +36,49 @@ inputs:
     description: 'Files: 指定で受け付ける最大ファイル数'
     required: false
     default: '20'
-  gemini_api_key:
-    description: 'Google AI Studio の API キー'
+  needs_json:
+    description: 'publish: 呼び出し元ジョブの toJSON(needs)（ai-N / verify-N の結果を含む）'
+    required: false
+    default: '{}'
+  max_rounds:
+    description: 'publish: AI と検証の最大往復回数'
+    required: false
+    default: '3'
+  verify_command:
+    description: 'publish: prepare の verify_command（報告用）'
+    required: false
+    default: ''
+  target_files:
+    description: 'publish: prepare の target_files（報告用）'
+    required: false
+    default: ''
+  artifact_prefix:
+    description: 'artifact 名の接頭辞（<prefix>-ctx / -patch-N / -log-N）'
     required: true
   github_token:
-    description: 'push / PR 作成 / Issue コメント用トークン'
-    required: true
+    description: 'prepare: 不要。publish: push / PR 作成 / Issue コメント用トークン'
+    required: false
+    default: ''
   status_comment_id:
     description: 'Issue 上の状況コメントの ID（gemini-ai-agent-status の ack 出力。空なら状況更新しない）'
     required: false
     default: ''
 
 outputs:
-  agent_status:
-    description: 'Aider の実行結果（success / failed）'
-    value: ${{ steps.aider.outputs.agent_status }}
+  # prepare（リポジトリのコードを実行する前に確定するため信頼できる）
+  base_sha:
+    description: '作業の起点にしたベースブランチのコミット'
+    value: ${{ steps.ctx.outputs.base_sha }}
+  verify_command:
+    description: '修正の検証コマンド'
+    value: ${{ steps.ctx.outputs.verify_command }}
+  target_files:
+    description: '対象ファイル（安全な文字のみ・空白区切り）'
+    value: ${{ steps.ctx.outputs.target_files }}
+  # publish
   test_status:
-    description: '最終テスト結果（passed / failed / skipped）'
-    value: ${{ steps.aider.outputs.test_status }}
+    description: '最後の検証結果（passed / failed / skipped）'
+    value: ${{ steps.apply.outputs.test_status }}
   pr_url:
     description: '作成した PR の URL（変更なしの場合は空）'
     value: ${{ steps.pr.outputs.pr_url }}
@@ -66,43 +86,9 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    # 状況表示スクリプトは同じリポジトリの gemini-ai-agent-status action に置いている
-    - name: '状況表示: 準備中 (Status: Preparing)'
-      shell: bash
-      env:
-        STATUS_GH_TOKEN: ${{ inputs.github_token }}
-        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
-        ISSUE_NUMBER: ${{ github.event.issue.number }}
-        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: |
-        bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update \
-          "⚙️ 準備中" "Aider のインストールと指示内容の解析を行っています。"
-
-    - name: 'Python環境のセットアップ (Setup Python)'
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ inputs.python_version }}
-
-    - name: 'Aider のインストール (Install Aider)'
-      shell: bash
-      env:
-        AIDER_VERSION: ${{ inputs.aider_version }}
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install "aider-chat==${AIDER_VERSION}"
-        aider --version
-
-    - name: 'Git 作成者の設定 (Configure Git Author)'
-      shell: bash
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-    - name: '.aiderignore の確認・自動生成 (Ensure .aiderignore Exists)'
-      shell: bash
-      run: bash "$GITHUB_ACTION_PATH/ensure_aiderignore.sh"
-
+    # ======================= prepare =======================
     - name: '指示文と対象ファイルの抽出 (Extract Prompt and Target Files)'
+      if: ${{ inputs.stage == 'prepare' }}
       shell: bash
       env:
         EVENT_NAME: ${{ github.event_name }}
@@ -115,84 +101,120 @@ runs:
         MAX_TARGET_FILES: ${{ inputs.max_target_files }}
       run: bash "$GITHUB_ACTION_PATH/extract_request.sh"
 
-    - name: '状況表示: AI 作業中 (Status: Agent Working)'
+    # 検証コマンド: CI と同じ順に Lint → テスト → ビルド（package.json がある場合）。/ai-fix と同じ
+    - name: 'AI 用の指示文の保存 (Save AI Context)'
+      id: ctx
+      if: ${{ inputs.stage == 'prepare' }}
       shell: bash
       env:
-        STATUS_GH_TOKEN: ${{ inputs.github_token }}
-        STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
-        ISSUE_NUMBER: ${{ github.event.issue.number }}
-        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         TEST_COMMAND: ${{ inputs.test_command }}
-        MAX_RETRIES: ${{ inputs.max_retries }}
-      # TARGET_FILES は extract_request.sh が $GITHUB_ENV に書き出した値（安全な文字のみ）
       run: |
-        if [ -n "${TARGET_FILES:-}" ]; then
-          detail="対象ファイル: \`${TARGET_FILES}\`"
-        else
-          detail="対象ファイル: 指定なし（リポジトリ構造から AI が判断）"
+        verify_command="${TEST_COMMAND:-}"
+        if [ -f package.json ]; then
+          verify_command="npm run lint --if-present${TEST_COMMAND:+ && ${TEST_COMMAND}} && npm run build --if-present"
         fi
-        if [ -n "$TEST_COMMAND" ]; then
-          detail+=$'\n'"修正後に自動テストを実行し、失敗した場合は AI が再修正します。"
-        fi
-        detail+=$'\n'"Gemini API 無料枠の上限（429）に達した場合は自動で待機して再試行するため（最大 ${MAX_RETRIES} 回）、この表示のまま数分続くことがあります。"
-        bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update \
-          "🧠 AI が作業中" "$detail"
+        mkdir -p "$RUNNER_TEMP/ai-ctx"
+        printf '%s\n' "$AI_PROMPT" > "$RUNNER_TEMP/ai-ctx/prompt.md"
+        printf '%s\n' "${TARGET_FILES:-}" > "$RUNNER_TEMP/ai-ctx/target_files.txt"
+        # TARGET_FILES は extract_request.sh が検証した安全な文字のみの値（改行なし）
+        {
+          echo "base_sha=$(git rev-parse HEAD)"
+          echo "verify_command=${verify_command}"
+          echo "target_files=${TARGET_FILES:-}"
+        } >> "$GITHUB_OUTPUT"
+        echo "verify_command=${verify_command}"
 
-    - name: 'Aider の実行（対象限定・自動リトライ・自己修正） (Run Aider with Retry & Self-Healing)'
-      id: aider
+    - name: 'AI 用の指示文のアップロード (Upload AI Context)'
+      if: ${{ inputs.stage == 'prepare' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact_prefix }}-ctx
+        path: ${{ runner.temp }}/ai-ctx/
+        retention-days: 1
+        if-no-files-found: error
+
+    # ======================= publish =======================
+    - name: '公開する作業結果の選択 (Select Work Result)'
+      id: select
+      if: ${{ inputs.stage == 'publish' }}
       shell: bash
       env:
-        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
-        MODEL_NAME: ${{ inputs.model_name }}
-        TEST_COMMAND: ${{ inputs.test_command }}
-        MAX_RETRIES: ${{ inputs.max_retries }}
-        INITIAL_DELAY: ${{ inputs.initial_delay }}
-      # GitHub トークンはこのステップに渡さない。Aider と（AI が編集し得る）テストは
-      # このステップのプロセスツリー内で動くため、unset しても親プロセスの
-      # /proc/<pid>/environ から読み取れてしまう。状況更新は前後の専用ステップで行う。
-      run: bash "$GITHUB_ACTION_PATH/run_aider.sh"
+        NEEDS_JSON: ${{ inputs.needs_json }}
+        MODE: fix
+        WORK_ACTION: patch
+        ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+        MAX_ROUNDS: ${{ inputs.max_rounds }}
+      run: bash "$GITHUB_ACTION_PATH/../gemini-ai-pr-publish/select_result.sh"
 
-    - name: '状況表示: AI の作業完了 (Status: Agent Finished)'
-      if: ${{ success() }}
+    - name: '作業ジョブの失敗 (Work Failed)'
+      if: ${{ inputs.stage == 'publish' && steps.select.outputs.work_failed == 'true' }}
+      shell: bash
+      run: |
+        echo "::error::AI による修正のジョブが失敗しました。実行ログを確認してください。"
+        exit 1
+
+    - name: 'patch の取得 (Download Patch)'
+      if: ${{ inputs.stage == 'publish' && steps.select.outputs.has_patch == 'true' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ steps.select.outputs.patch_artifact }}
+        path: ${{ runner.temp }}/ai-patch
+
+    - name: 'Git 作成者の設定 (Configure Git Author)'
+      if: ${{ inputs.stage == 'publish' }}
+      shell: bash
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    # 作業ジョブ（verify はリポジトリのコードを実行する）の出力と patch は信頼しない値として検証する
+    - name: '作業結果の検証と適用 (Validate & Apply Patch)'
+      id: apply
+      if: ${{ inputs.stage == 'publish' }}
+      shell: bash
+      env:
+        PATCH_FILE: ${{ steps.select.outputs.has_patch == 'true' && format('{0}/ai-patch/changes.patch', runner.temp) || '' }}
+        HEAD_SHA: ${{ inputs.base_sha }}
+        MODE: fix
+        ATTEMPTS: ${{ steps.select.outputs.rounds }}
+        TEST_STATUS: ${{ steps.select.outputs.test_status }}
+        VERIFY_COMMAND: ${{ inputs.verify_command }}
+      run: bash "$GITHUB_ACTION_PATH/../gemini-ai-pr-publish/apply_patch.sh"
+
+    - name: '状況表示: 作業完了 (Status: Work Finished)'
+      if: ${{ inputs.stage == 'publish' }}
       shell: bash
       env:
         STATUS_GH_TOKEN: ${{ inputs.github_token }}
         STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
         ISSUE_NUMBER: ${{ github.event.issue.number }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        ATTEMPTS: ${{ steps.aider.outputs.attempts }}
-        TEST_STATUS: ${{ steps.aider.outputs.test_status }}
+        ROUNDS: ${{ steps.apply.outputs.attempts }}
+        TEST_STATUS: ${{ steps.apply.outputs.test_status }}
       run: |
         case "$TEST_STATUS" in
           passed) test_label="✅ 成功" ;;
           failed) test_label="❌ 失敗（Draft PR として作成します）" ;;
           *) test_label="⏭️ 未実行" ;;
         esac
-        retries=$(( ${ATTEMPTS:-1} - 1 ))
-        # 経過（History）には見出しだけが残るため、試行回数とテスト結果は見出しに含める
+        # 経過（History）には見出しだけが残るため、修正回数と検証結果は見出しに含める
         bash "$GITHUB_ACTION_PATH/../gemini-ai-agent-status/status_comment.sh" update \
-          "🔍 AI の作業が完了しました（試行 ${ATTEMPTS:-1} 回・再試行 ${retries} 回・最終テスト: ${test_label}）"
-
-    - name: 'Aider ログの保存 (Upload Aider Logs)'
-      if: ${{ always() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: aider-logs-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/aider/
-        retention-days: 7
-        if-no-files-found: ignore
+          "🔍 AI の作業が完了しました（修正 ${ROUNDS:-?} 回・検証: ${test_label}）"
 
     - name: '変更があれば PR を作成 (Create Pull Request if Changes Exist)'
       id: pr
+      if: ${{ inputs.stage == 'publish' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         BASE_BRANCH: ${{ inputs.base_branch }}
+        BASE_SHA: ${{ inputs.base_sha }}
         ISSUE_NUMBER: ${{ github.event.issue.number }}
         MODEL_NAME: ${{ inputs.model_name }}
-        TEST_COMMAND: ${{ inputs.test_command }}
-        TEST_STATUS: ${{ steps.aider.outputs.test_status }}
-        ATTEMPTS: ${{ steps.aider.outputs.attempts }}
+        VERIFY_COMMAND: ${{ steps.apply.outputs.verify_command }}
+        TEST_STATUS: ${{ steps.apply.outputs.test_status }}
+        ATTEMPTS: ${{ steps.apply.outputs.attempts }}
+        TARGET_FILES: ${{ inputs.target_files }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         STATUS_COMMENT_ID: ${{ inputs.status_comment_id }}
         STATUS_SCRIPT: ${{ github.action_path }}/../gemini-ai-agent-status/status_comment.sh
