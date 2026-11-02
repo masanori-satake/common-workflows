@@ -227,8 +227,10 @@ AI が失敗したステップのログを読んで原因を特定し、修正�
 - push 後、PR の CI（コード品質検証・セキュリティスキャンなど）を `workflow_dispatch` ですべて再実行します。
   再実行の結果は **「Actions」** タブ（PR ブランチの実行）で確認できます。
 - ⚠️ GitHub の仕様により、`workflow_dispatch` で実行した CI は **PR の「Checks」欄に表示されず、必須ステータスチェックも満たしません**。
-  PR の「Checks」欄に結果を出すには、PR を **Close → Reopen** してください（`code-quality.yml`・`security-scan.yml` を含む全 CI が
-  `pull_request` イベントで実行されます）。`workflow_dispatch` が無いワークフロー（`version-bump.yml`・`coverage.yml` など）も同じ方法で実行します。
+  PR の「Checks」欄に結果を出すには、PR を **Close → Reopen** してください。`code-quality.yml`・`security-scan.yml` などが
+  `pull_request` イベントで実行されます。`workflow_dispatch` が無いワークフロー（`version-bump.yml`・`coverage.yml` など）も同じ方法で実行します。
+  ただし、各ワークフローの `branches` / `paths` の条件に一致しない PR では、そのワークフローは実行されません
+  （例: `projects/app/**` を変更していない PR では `version-bump.yml` は実行されない）。
 - 安全のため、PR のコードを実行する検証と、API キーを使う AI の修正は別々のジョブで行い、どちらも書き込み権限を持ちません。
   push は、さらに別のジョブが作業結果を確認してから行います。そのため作業中は状況コメントを更新しません
   （「⚙️ 作業ジョブで処理中」のまま数分〜数十分続きます）。
@@ -390,7 +392,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | 「処理中に PR ブランチが更新されたため、push を中止しました」 | AI の作業中に誰かが PR に push した。もう一度コメントする |
 | `/ai-bump` で「update-version スクリプトがありません」 | package.json に `scripts.update-version` が無い。テンプレートの `scripts/update-version.js` を導入する |
 | push 後に CI が再実行されない（「再実行できませんでした」） | 対象ワークフローに `workflow_dispatch` が無い。追加するか、PR を Close → Reopen する |
-| `/ai-fix` / `/ai-bump` の後、PR の「Checks」欄が古いまま・必須チェックが「Expected」のまま | GitHub の仕様。`workflow_dispatch` で再実行した CI は PR の「Checks」欄に表示されない（結果は Actions タブで確認できる）。PR を Close → Reopen すると `pull_request` イベントで全 CI が実行され、「Checks」欄に表示される |
+| `/ai-fix` / `/ai-bump` の後、PR の「Checks」欄が古いまま・必須チェックが「Expected」のまま | GitHub の仕様。`workflow_dispatch` で再実行した CI は PR の「Checks」欄に表示されない（結果は Actions タブで確認できる）。PR を Close → Reopen すると、`pull_request` で起動する CI のうち `branches` / `paths` の条件に一致するものが実行され、「Checks」欄に表示される |
 
 ---
 
