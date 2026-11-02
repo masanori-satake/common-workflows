@@ -3,7 +3,10 @@
 # プロジェクトの update-version スクリプトで関連ファイルを一括更新してコミットする。
 # AI は使わない（決定的な処理のため）。
 #   - CHANGELOG.md の自動生成プレースホルダーは、PR タイトルから作った説明文に置き換える
-#   - 更新後に scripts/check-version.js --check-bump で整合性を検証する
+#   - 更新後に整合性を検証する（VS Code 拡張機能: scripts/check-version.js --check-bump、
+#     Chrome 拡張機能: scripts/check_version.py）
+#   - update-version スクリプトは VS Code テンプレートの scripts/update-version.js、
+#     Chrome テンプレートの scripts/update_version.py（package.json の scripts.update-version から呼ぶ）
 #
 # 入力（env）: BUMP_TYPE, BASE_REF, PR_NUMBER, PR_TITLE
 # 出力（$GITHUB_OUTPUT）: new_version, old_version, changed
@@ -41,7 +44,7 @@ if node -e "process.exit(require('./package.json').scripts?.['update-version'] ?
 elif [ -f scripts/update-version.js ]; then
   node scripts/update-version.js "$new"
 else
-  echo "::error::update-version スクリプト（package.json の scripts.update-version または scripts/update-version.js）がありません。"
+  echo "::error::update-version スクリプト（package.json の scripts.update-version または scripts/update-version.js）がありません。common-workflows のテンプレート（VS Code: scripts/update-version.js、Chrome: scripts/update_version.py）を導入してください。"
   exit 1
 fi
 
@@ -75,6 +78,8 @@ fi
 # 整合性とバージョン昇格の検証
 if [ -f scripts/check-version.js ]; then
   VERSION_BASE_REF="origin/${BASE_REF}" node scripts/check-version.js --check-bump
+elif [ -f scripts/check_version.py ]; then
+  python3 scripts/check_version.py
 fi
 
 changed=false

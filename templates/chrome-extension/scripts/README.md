@@ -15,6 +15,7 @@
 | `ci_checks.py` | CI ポリシーチェックの**単一エントリ** | `base-ci.yml` が存在すれば自動実行 |
 | `check_version.py` | 複数ファイルのバージョン整合性検査 | `ci_checks.py` から呼ぶ |
 | `create_package.py` | `projects/app` を ZIP 化し `releases/` に出力 | `npm run build` から呼び、`base-release.yml` が `releases/*.zip` を添付 |
+| `update_version.py` | 複数ファイルのバージョン表記を指定バージョンへ一括更新し、最後に `check_version.py` で検証 | `npm run update-version -- <X.Y.Z>` から呼ぶ。PR の `/ai-bump patch\|minor`（`gemini-ai-pr-fix-template.yml`）が実行する |
 
 > アイコン生成（SVG→PNG）は**プロジェクト側スクリプト不要**です。`base-release.yml`
 > の `generate_icons: true` で共通の composite action（`generate-icons`）が実行します。
@@ -32,6 +33,14 @@
 - README バッジ等のテキスト → `regex_version(r"...")`
 - `required=True` を付けたソースが1つでもあれば、それが基準になります。
 
+### update_version.py
+`check_version.py` の `VERSION_SOURCES` と同じファイルを、`JSON_TARGETS` / `TEXT_TARGETS` に列挙します。
+- トップレベルの `"version"` を持つ JSON → `JsonTarget("path")`（`package-lock.json` は `lockfile=True`）
+- README バッジ・Service Worker のキャッシュ名などのテキスト → `TextTarget("path", r"(前置部)(\d+\.\d+\.\d+)(後置部)")`
+- 書式（インデント・改行コード）は保ったまま、バージョン部分だけを置き換えます。
+
+バージョンの更新方法は VS Code 拡張機能と揃えています（`npm run update-version -- <X.Y.Z>`、PR では `/ai-bump patch|minor`）。
+
 ### create_package.py
 `SOURCE_DIR` / `VERSION_FILE` / `EXCLUDE_*` / `RENAME_MAP` を編集します。
 `manifest.chrome.json → manifest.json` のようなリネームは `RENAME_MAP` で行います。
@@ -45,7 +54,9 @@
     "test": "node scripts/test_utils.js && python3 scripts/check_version.py",
     // build は releases/*.zip を生成する。アイコンを共通 action で作る場合は
     // ここに generate_png_icons.py を入れない（base-release の generate_icons を使う）。
-    "build": "python3 scripts/check_version.py && python3 scripts/create_package.py"
+    "build": "python3 scripts/check_version.py && python3 scripts/create_package.py",
+    // バージョンの一括更新（/ai-bump もこのスクリプトを使う）
+    "update-version": "python3 scripts/update_version.py"
   }
 }
 ```

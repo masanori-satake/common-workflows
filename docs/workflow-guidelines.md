@@ -312,6 +312,8 @@ jobs:
 
 - `ci_checks.py` — CI ポリシーチェックの単一エントリ（`base-ci.yml` が自動実行）
 - `check_version.py` — `VERSION_SOURCES` にファイルを列挙するだけの整合性チェック
+- `update_version.py` — `JSON_TARGETS`/`TEXT_TARGETS` を列挙するだけのバージョン一括更新。`npm run update-version -- <X.Y.Z>`
+  から呼び、PR の `/ai-bump` も同じスクリプトを使う（VS Code 拡張機能の `update-version.js` と呼び出し方を揃える）
 - `create_package.py` — `SOURCE_DIR`/`EXCLUDE_*`/`RENAME_MAP` を編集する ZIP 生成
 
 これにより「共通化はできないが、ゼロから書き起こす必要もない」状態を作り、
@@ -512,8 +514,10 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   - `build_round_prompt.sh` — 2 回目以降は前回の検証ログと、前回までに変更したファイルを指示文・対象ファイルに加える
   - `run_verify.sh` — 依存関係のインストール（`npm ci` 等）と検証コマンドを実行し、結果（passed / failed）とログ末尾を
     出力（インストールの失敗も検証の失敗として扱い、ジョブの失敗にはしない）
-  - `bump_version.sh` — ベースブランチのバージョンを基準に `npm run update-version` を実行し、
-    CHANGELOG のプレースホルダーを PR タイトルから作った説明に置き換えて `--check-bump` で検証
+  - `bump_version.sh` — ベースブランチのバージョンを基準に `npm run update-version -- <X.Y.Z>` を実行し、
+    CHANGELOG のプレースホルダーを PR タイトルから作った説明に置き換えて検証（`check-version.js --check-bump`、
+    無ければ `check_version.py`）。update-version の実体は VS Code テンプレートの `scripts/update-version.js`、
+    Chrome テンプレートの `scripts/update_version.py`。プロジェクト種別が違っても呼び出し方は共通にする
 - 公開用 composite action: `.github/actions/gemini-ai-pr-publish`
   - `select_result.sh` — 変更を作った最後の回の累積 patch とその回の検証結果（`/ai-bump` は bump の patch）を選ぶ
   - `apply_patch.sh` — 作業系ジョブの出力を検証し、patch を `git -c core.hooksPath=/dev/null am` で適用。

@@ -244,9 +244,16 @@ AGENTS.md の基準で種別を決め、PR にコメントしてください。
 | `/ai-bump patch` | X.Y.Z → X.Y.(Z+1) | 不具合修正、軽微な UI 調整、README などパッケージ同梱ドキュメントの更新 |
 
 - 新しいバージョンは **ベースブランチ（main）のバージョン** を基準に決めます（何度実行しても二重に上がりません）。
-- プロジェクトの `npm run update-version` で package.json / package-lock.json / README.md / CHANGELOG.md を一括更新し、
-  バージョンチェック（`--check-bump`）が通ることを確認してから push します。AI は使いません。
-- CHANGELOG.md の説明は、PR タイトルから作成します（`feat:` → 追加、`fix:` → 修正、それ以外 → 変更）。
+- プロジェクトの `npm run update-version -- <X.Y.Z>` で関連ファイルを一括更新し、バージョンチェックが通ることを
+  確認してから push します。AI は使いません。どの種別のプロジェクトでも、この呼び出し方は共通です。
+
+  | プロジェクト種別 | update-version の実体（テンプレート） | 更新するファイルの例 | 検証 |
+  | :--- | :--- | :--- | :--- |
+  | VS Code 拡張機能 | `scripts/update-version.js` | package.json / package-lock.json / README.md / CHANGELOG.md | `check-version.js --check-bump` |
+  | Chrome 拡張機能 | `scripts/update_version.py` | package.json / package-lock.json / `projects/app/manifest.json` / `projects/app/version.json` / README.md のバッジ | `check_version.py` |
+
+  更新するファイルはプロジェクトごとにスクリプト内で設定します（例: PWA のキャッシュ名もある場合は追加）。
+- CHANGELOG.md がある場合、説明は PR タイトルから作成します（`feat:` → 追加、`fix:` → 修正、それ以外 → 変更）。
   必要に応じて PR ブランチ上で書き直してください。
 - バージョン更新の後もほかのチェックが失敗する場合は、改めて `/ai-fix` をコメントします。
 
@@ -384,7 +391,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | Issue に `/ai-help` などとコメントしたら AI が作業を始めた | `ai-coder-trigger.yml` が古い（`/ai-` で始まるコメントを除外していない）。テンプレートの最新版に差し替える |
 | 「フォークからの PR は対象外です」 | フォークの PR は安全のため対象外。PR の作成者に修正を依頼する |
 | 「処理中に PR ブランチが更新されたため、push を中止しました」 | AI の作業中に誰かが PR に push した。もう一度コメントする |
-| `/ai-bump` で「update-version スクリプトがありません」 | package.json に `scripts.update-version` が無い。テンプレートの `scripts/update-version.js` を導入する |
+| `/ai-bump` で「update-version スクリプトがありません」 | package.json に `scripts.update-version` が無い。テンプレートのスクリプト（VS Code: `scripts/update-version.js`、Chrome: `scripts/update_version.py`）を導入し、`scripts.update-version` に登録する |
 | push 後に CI が再実行されない（「再実行できませんでした」） | 対象ワークフローに `workflow_dispatch` が無い。追加するか、PR を Close → Reopen する |
 
 ---
