@@ -520,7 +520,10 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
     `.github/workflows/` の変更を含む patch は拒否
   - `post_guidance.sh`（`gemini-ai-pr-fix` 内）— バージョンチェックの失敗・失敗なしの場合に案内をコメント
   - `push_and_report.sh`（`gemini-ai-pr-fix` 内）— PR が Open で head（SHA・ブランチ・リポジトリ）が不変であることを
-    API で確認して push し、完了済みの全ワークフローを `workflow_dispatch` で再実行して PR にコメント
+    API で確認して push し、完了済みの全ワークフローを `workflow_dispatch` で再実行して PR にコメント。
+    `workflow_dispatch` の実行は PR の「Checks」欄に表示されず、必須ステータスチェックも満たさない（GitHub の仕様）。
+    PR のチェックとして結果を出すには PR を Close → Reopen する（GITHUB_TOKEN 以外の資格情報での push は、
+    必須チェックを導入するまで見送り）
 - 呼び出し側は `ai-coder-trigger.yml` の `ai-pr-fix` ジョブ（`actions: write` が必要）
 - 運用ルール:
   - 人が作った PR も対象とする（フォークの PR は対象外）
