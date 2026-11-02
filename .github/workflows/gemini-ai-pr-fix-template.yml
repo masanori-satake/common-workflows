@@ -109,11 +109,20 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
+      # 有効な /ai-fix・/ai-bump patch|minor のときだけ true（後続のジョブはこれで判定する）
+      valid: ${{ steps.cmd.outputs.kind == 'fix' || steps.cmd.outputs.kind == 'bump' }}
       comment_id: ${{ steps.ack.outputs.comment_id }}
       reaction_id: ${{ steps.ack.outputs.reaction_id }}
     steps:
+      # 上の if は粗い絞り込み。コマンドの境界（/ai-fixx 等を除外）は共通の定義で判定する。
+      # 解釈できないコマンドはヘルプ（gemini-ai-help-template.yml）が案内する
+      - name: 'コマンドの判定 (Classify Command)'
+        id: cmd
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-command@v1
+
       - name: '受付リアクションと状況コメントの投稿 (Post Acknowledgement)'
         id: ack
+        if: ${{ steps.cmd.outputs.kind == 'fix' || steps.cmd.outputs.kind == 'bump' }}
         continue-on-error: true
         uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
         with:
@@ -130,19 +139,22 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ steps.ack.outputs.comment_id }}
           headline: '⚙️ 作業ジョブで処理中'
-          detail: 'CI ログの解析、AI による修正と検証（失敗した場合は検証ログをもとに最大 3 回まで再修正）を行っています。/ai-bump ではバージョンを更新しています。同じ PR で前の処理が実行中の場合は、その完了後に開始します。安全のため作業中は状況を更新しません（数分〜数十分かかります）。進み具合は実行ログで確認できます。'
+          detail: 'CI ログの解析、AI による修正と検証（失敗した場合は検証ログをもとに最大 3 回まで再修正）を行っています。/ai-bump ではバージョンを更新しています。同じ PR への依頼は準備（CI ログの収集）だけを順番に行い、前の処理の完了は待ちません。並行して動いた場合、後から終わった処理は PR ブランチが先に更新されているため push を中止することがあります。安全のため作業中は状況を更新しません（数分〜数十分かかります）。進み具合は実行ログで確認できます。'
 
   # 準備: PR 情報と CI ログを集める。読み取りトークンのみ・PR のコードは実行しない
   prepare:
     name: '準備 (Prepare)'
     needs: acknowledge
+    if: ${{ needs.acknowledge.outputs.valid == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       actions: read
       pull-requests: read
-    # 同一 PR への操作は直列化し、待機中のリクエストも順番に処理する
+    # 同一 PR への依頼は準備（このジョブ）だけを順番に行う。後続の ai / verify / publish は
+    # 直列化しないため、前の処理の完了は待たない。並行した場合、後から終わった publish は
+    # head の照合（push_and_report.sh）で push を中止する
     concurrency:
       group: gemini-ai-pr-fix-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -391,7 +403,7 @@ jobs:
   publish:
     name: '公開 (Publish: Push & Report)'
     needs: [acknowledge, prepare, bump, ai-1, verify-1, ai-2, verify-2, ai-3, verify-3]
-    if: ${{ always() && needs.acknowledge.result == 'success' }}
+    if: ${{ always() && needs.acknowledge.result == 'success' && needs.acknowledge.outputs.valid == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

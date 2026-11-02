@@ -319,33 +319,25 @@ runs:
           echo "kind=no-lockfile" >> "$GITHUB_OUTPUT"
         fi
 
+    # npm キャッシュは使わない。issue_comment で起動したワークフローのキャッシュは既定ブランチの
+    # スコープに保存され、リリース等の他のワークフローからも復元される。PR のコードを実行する
+    # ジョブでキャッシュを保存すると、細工された依存パッケージがそれらに混入し得るため。
     - name: 'Node.js環境のセットアップ (Setup Node.js)'
       if: ${{ (inputs.stage == 'verify' || inputs.stage == 'bump') && steps.node_project.outputs.kind != 'none' }}
       uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node_version }}
-        cache: ${{ steps.node_project.outputs.kind == 'lockfile' && 'npm' || '' }}
-
-    - name: '依存関係のインストール (Install Dependencies)'
-      if: ${{ inputs.stage == 'verify' && steps.node_project.outputs.kind != 'none' }}
-      shell: bash
-      env:
-        NODE_PROJECT_KIND: ${{ steps.node_project.outputs.kind }}
-      run: |
-        if [ "$NODE_PROJECT_KIND" = "lockfile" ]; then
-          npm ci
-        else
-          # lockfile が無いリポジトリに package-lock.json を作らない
-          npm install --no-package-lock
-        fi
 
     # ======================= verify =======================
+    # 依存関係のインストールも検証の一部として run_verify.sh で行う（AI の変更で npm ci が
+    # 失敗した場合も「検証の失敗」としてログを残し、次の回の AI に渡すため）
     - name: '修正の検証 (Verify Fix)'
       id: verify
       if: ${{ inputs.stage == 'verify' }}
       shell: bash
       env:
         VERIFY_COMMAND: ${{ inputs.verify_command }}
+        INSTALL_COMMAND: ${{ steps.node_project.outputs.kind == 'lockfile' && 'npm ci' || (steps.node_project.outputs.kind == 'no-lockfile' && 'npm install --no-package-lock' || '') }}
       run: bash "$GITHUB_ACTION_PATH/run_verify.sh"
 
     - name: '検証ログの保存 (Upload Verification Log)'

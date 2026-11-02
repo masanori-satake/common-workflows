@@ -6,8 +6,10 @@ name: 'Gemini AI エージェントのヘルプ (Gemini AI Agent Help Shared Wor
 # Issue / PR に `/ai-` で始まるコメントがあったときに、使えるコマンドと注意事項をコメントで返す。
 #   - /ai-help                 ヘルプを表示（Issue / PR に応じて表示順を変える）
 #   - Issue での /ai-fix・/ai-bump  PR でのみ使えることを案内
-#   - そのほかの /ai-xxx       解釈できなかったことを伝えてヘルプを表示
-#   PR での /ai-fix・/ai-bump は gemini-ai-pr-fix-template.yml が処理するため、ここでは扱わない。
+#   - そのほかの /ai-xxx       解釈できなかったことを伝えてヘルプを表示（/ai-fixx・/ai-bump major 等を含む）
+#   PR での有効な /ai-fix・/ai-bump patch|minor は gemini-ai-pr-fix-template.yml が処理するため、
+#   ここでは何もしない。コマンドの境界は修正ワークフローと共通の定義（gemini-ai-command）で判定し、
+#   下の if は `/ai-` で始まるかだけを見る粗い絞り込みにとどめる。
 #
 # セキュリティ方針 (Security Policy)
 #   - コメント起動は author_association が allowed_associations に含まれる場合のみ
@@ -35,8 +37,6 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       startsWith(github.event.comment.body, '/ai-') &&
-      !(github.event.issue.pull_request &&
-        (startsWith(github.event.comment.body, '/ai-fix') || startsWith(github.event.comment.body, '/ai-bump'))) &&
       github.actor != 'github-actions[bot]' &&
       !endsWith(github.actor, '[bot]') &&
       github.event.sender.type != 'Bot' &&

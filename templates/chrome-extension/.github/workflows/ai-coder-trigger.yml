@@ -69,14 +69,13 @@ jobs:
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-  # Issue / PR へのコメントで起動: /ai-help（ヘルプ）と、解釈できない /ai-xxx への案内
+  # Issue / PR へのコメントで起動: /ai-help（ヘルプ）と、解釈できない /ai-xxx への案内。
+  # 有効な PR の /ai-fix・/ai-bump かどうかは共通の定義で判定し、該当する場合は何もしない
   ai-help:
     name: 'Gemini AI ヘルプ表示 (Execute Gemini AI Help)'
     if: >-
       github.event_name == 'issue_comment' &&
       startsWith(github.event.comment.body, '/ai-') &&
-      !(github.event.issue.pull_request &&
-        (startsWith(github.event.comment.body, '/ai-fix') || startsWith(github.event.comment.body, '/ai-bump'))) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: masanori-satake/common-workflows/.github/workflows/gemini-ai-help-template.yml@v1
     permissions:

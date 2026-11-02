@@ -46,8 +46,12 @@ elif [ "${WORK_ACTION:-}" = "patch" ] && [ "${MODE:-}" = "fix" ]; then
     if [ "$(need_out "ai-${n}" changed)" = "true" ]; then
       patch_artifact="${ARTIFACT_PREFIX}-patch-${n}"
       has_patch=true
-      test_status="$(need_out "verify-${n}" status)"
-      [ "$(need "verify-${n}" result)" = "success" ] || test_status=""
+      # 検証ジョブが成功以外（失敗・タイムアウト・キャンセル等）で終わった場合は、検証は通っていないので failed とする
+      if [ "$(need "verify-${n}" result)" = "success" ]; then
+        test_status="$(need_out "verify-${n}" status)"
+      else
+        test_status=failed
+      fi
     fi
   done
 fi

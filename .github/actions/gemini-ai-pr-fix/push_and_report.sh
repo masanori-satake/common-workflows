@@ -90,7 +90,7 @@ if [ "${MODE:-fix}" = "bump" ]; then
 else
   case "${TEST_STATUS:-skipped}" in
     passed) test_line="✅ 成功" ;;
-    failed) test_line="❌ 失敗（上限回数まで修正しても検証が通りませんでした。差分を確認し、必要なら \`/ai-fix <追加の指示>\` で再依頼してください）" ;;
+    failed) test_line="❌ 失敗（最後の修正が検証を通りませんでした。上限回数に達した、または次の回の AI が変更なしで終わった・失敗した可能性があります。差分を確認し、必要なら \`/ai-fix <追加の指示>\` で再依頼してください）" ;;
     *) test_line="⏭️ 未実行" ;;
   esac
   headline="🛠️ CI の失敗を修正するコミットを push しました。"
