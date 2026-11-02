@@ -3,13 +3,13 @@ description: 'Gemini AI エージェントの処理状況を Issue 上に表示�
 
 inputs:
   mode:
-    description: 'ack（受付）/ finish（完了）'
+    description: 'ack（受付）/ update（状況の書き換え）/ finish（完了）'
     required: true
   github_token:
     description: 'Issue コメント・リアクション用トークン（issues: write）'
     required: true
   status_comment_id:
-    description: '状況コメントの ID（finish 時。ack の出力を渡す）'
+    description: '状況コメントの ID（update / finish 時。ack の出力を渡す）'
     required: false
     default: ''
   reaction_id:
@@ -21,7 +21,15 @@ inputs:
     required: false
     default: 'failure'
   pr_url:
-    description: 'finish 時に表示する PR の URL'
+    description: 'finish 時に表示する URL'
+    required: false
+    default: ''
+  headline:
+    description: 'update 時の見出し（経過欄に残る）'
+    required: false
+    default: ''
+  detail:
+    description: 'update 時の詳細（次の更新で上書きされる）'
     required: false
     default: ''
 
@@ -50,9 +58,11 @@ runs:
         MODE: ${{ inputs.mode }}
         RESULT: ${{ inputs.result }}
         PR_URL: ${{ inputs.pr_url }}
+        HEADLINE: ${{ inputs.headline }}
+        DETAIL: ${{ inputs.detail }}
       run: |
-        if [ "$MODE" = "finish" ]; then
-          bash "$GITHUB_ACTION_PATH/status_comment.sh" finish "$RESULT" "$PR_URL"
-        else
-          bash "$GITHUB_ACTION_PATH/status_comment.sh" "$MODE"
-        fi
+        case "$MODE" in
+          finish) bash "$GITHUB_ACTION_PATH/status_comment.sh" finish "$RESULT" "$PR_URL" ;;
+          update) bash "$GITHUB_ACTION_PATH/status_comment.sh" update "$HEADLINE" "$DETAIL" ;;
+          *) bash "$GITHUB_ACTION_PATH/status_comment.sh" "$MODE" ;;
+        esac

@@ -147,7 +147,11 @@ fi
 
 echo "対象ファイル: ${targets[*]+"${targets[*]}"}"
 {
-  echo "- 対象ファイル (Target files): ${targets[*]:+\`${targets[*]}\`}${targets[*]:-指定なし（リポジトリ構造から AI が判断）}"
+  if [ "${#targets[@]}" -gt 0 ]; then
+    echo "- 対象ファイル (Target files): \`${targets[*]}\`"
+  else
+    echo "- 対象ファイル (Target files): 指定なし（リポジトリ構造から AI が判断）"
+  fi
   echo "- 指示文の長さ (Prompt length): ${#prompt} 文字"
   echo ""
 } >> "$GITHUB_STEP_SUMMARY"

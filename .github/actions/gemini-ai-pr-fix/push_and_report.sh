@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 修正を PR ブランチへ push し、失敗していた CI を再実行して PR にコメントで報告する。
-#   - コミットは前段のトークン無しステップで作成済み（このスクリプトはリポジトリのコードを実行しない）
+#   - 公開ジョブで実行する。コミットは作業ジョブが作成し、apply_patch.sh が新しい checkout に適用済み
+#     （このスクリプトはリポジトリのコードを実行しない）
 #   - push 前に PR が Open のままで、head が処理開始時から変わっていないことを確認する
-#   - push は git フックを無効化して行う（フックはリポジトリのコードのため）
+#   - push は git フックを無効化して行う
 #   - GITHUB_TOKEN の push では CI が起動しないため、workflow_dispatch で再実行する
 #
 # 入力（env）: GH_TOKEN, MODE, PR_NUMBER, HEAD_REF, HEAD_SHA, RERUN_WORKFLOWS,
@@ -24,9 +25,6 @@ comment_pr() {
   gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$1"
 }
 
-# コミット済み（/ai-fix は action.yml のトークン無しステップ、/ai-bump は bump_version.sh）。
-# コミットから除外した .github/workflows/ の変更が残っていれば報告する。
-skipped_workflows="$(git status --porcelain -- .github/workflows || true)"
 
 if [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]; then
   echo "変更はありませんでした。(No changes)"
@@ -82,9 +80,6 @@ else
   details="- 検証コマンド: \`${VERIFY_COMMAND:-なし}\`"$'\n'
   details+="- 検証結果: ${test_line}"$'\n'
   details+="- 試行回数: ${ATTEMPTS:-1}"$'\n'
-  if [ -n "$skipped_workflows" ]; then
-    details+="- ⚠️ \`.github/workflows/\` への変更は GITHUB_TOKEN で push できないため除外しました。"$'\n'
-  fi
 fi
 
 msg="${headline}"$'\n\n'"${details}- コミット: ${commit_url}"$'\n'"- 実行ログ: ${RUN_URL}"
