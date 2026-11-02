@@ -349,7 +349,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | 入力 | 既定値 | 説明 |
 | :--- | :--- | :--- |
 | `model_name` | `gemini-3.8-flash` | 使用する Gemini モデル |
-| `test_command` | `npm test` | 修正の検証で Lint とビルドの間に実行するテスト。空文字 `''` でテストなし（Lint・ビルドは実行）。VS Code テンプレートは `xvfb-run --auto-servernum npm test` |
+| `test_command` | `npm test` | 修正の検証で Lint とビルドの間に実行するテスト。空文字 `''` ではテストを実行しない。Lint・ビルドは、package.json があり `lint` / `build` スクリプトが定義されている場合にだけ実行する（`npm run --if-present`）。VS Code テンプレートは `xvfb-run --auto-servernum npm test` |
 | `max_fix_rounds` | `3` | AI による修正と検証の最大往復回数（1〜3） |
 | `target_branch` | リポジトリの既定ブランチ | 作業のベースブランチ |
 | `max_retries` | `4` | 429 発生時の最大試行回数 |
@@ -393,7 +393,7 @@ PR 画面の下部で **「Close pull request」** → **「Reopen pull request�
 | `NotFoundError` / `no longer available to new users` | `model_name` の誤り、またはそのモデルが新規ユーザーに提供されていない。[モデルの確認](#使用するモデルが自分のキーで使えるか確認する推奨) の手順で使えるモデルを選び、`model_name` で指定 |
 | 4 回リトライしても 429 で失敗 | 1 日あたりの上限に到達した可能性。リセット（太平洋時間 0 時 = 日本時間 16〜17 時）後に `/ai` コメントで再実行 |
 | PR 作成で 403 エラー | [ステップ 3](#ステップ-3-github-actions-に-pr-作成を許可する) のチェックが入っていない |
-| PR が Draft で作成された | AI の最後の修正が検証（Lint → テスト → ビルド）で失敗。PR 本文と実行ログの「修正の検証」ジョブを確認 |
+| PR が Draft で作成された | AI の最後の修正が検証（依存関係のインストール → Lint → テスト → ビルド）のいずれかで失敗。PR 本文と実行ログの「修正の検証」ジョブを確認 |
 | 「変更はありませんでした」とコメントされた | 指示が曖昧、または対象ファイルが除外された。Summary の対象ファイル表と指示内容を見直す |
 | PR で CI が動かない | GitHub の仕様。PR を Close → Reopen する |
 | 失敗時に Issue へ ⚠️ コメントが付いた | コメント内の「実行ログ」リンクからエラー内容を確認 |

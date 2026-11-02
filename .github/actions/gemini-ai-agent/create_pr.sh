@@ -22,7 +22,8 @@ comment_issue() {
   fi
 }
 
-if [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
+# コミットの有無ではなく最終的な内容で判定する（後の回で前の回の変更を元に戻した場合も「変更なし」）
+if git diff --quiet "$BASE_SHA" HEAD; then
   echo "AI による変更はありませんでした。(No changes detected by AI)"
   echo "ℹ️ 変更なし: AI による変更はありませんでした。" >> "$GITHUB_STEP_SUMMARY"
   echo "pr_url=" >> "$GITHUB_OUTPUT"

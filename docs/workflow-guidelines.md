@@ -448,12 +448,13 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   | `publish` | 書き込み | なし | しない | 作業結果を検証してブランチに push、PR 作成（最後の検証が失敗なら Draft）、Issue に報告 |
 
 - Issue 固有の composite action: `.github/actions/gemini-ai-agent`（`stage: prepare / publish`）
-  - `ensure_aiderignore.sh` — `.aiderignore` が無ければ既定の除外リストを生成（`ai` ステージから使う）
-  - `extract_request.sh` — 指示文と `Files:` 指定を抽出し、`$GITHUB_ENV` へランダムデリミタで書き出す
-  - `run_aider.sh` — 429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）。`ai` ステージから使う
-  - `create_pr.sh` — 適用済みの作業結果をブランチ `chore/ai-issue-<番号>-<run_id>` に push し PR 作成
+  - `extract_request.sh` — 指示文と `Files:` 指定を抽出し、`$GITHUB_ENV` へランダムデリミタで書き出す（`prepare`）
+  - `create_pr.sh` — 適用済みの作業結果をブランチ `chore/ai-issue-<番号>-<run_id>` に push し PR 作成（`publish`）
 - AI による修正と検証は PR 修正の `.github/actions/gemini-ai-pr-fix`（`stage: ai / verify`）を共用し、
   作業結果の選択と検証は `gemini-ai-pr-publish` の `select_result.sh` / `apply_patch.sh` を共用する
+- 両フローの `ai` ステージから参照する共有スクリプト（配置は `.github/actions/gemini-ai-agent/`）
+  - `ensure_aiderignore.sh` — `.aiderignore` が無ければ既定の除外リストを生成
+  - `run_aider.sh` — Aider の実行。429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）、リポジトリの Aider 設定の退避
 - 状況表示 composite action: `.github/actions/gemini-ai-agent-status`（`status_comment.sh`）
   - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿し、「作業ジョブで処理中」にする
   - 作業系ジョブは状況コメントを書く権限を持たないため、作業中は更新しない。`publish` が
