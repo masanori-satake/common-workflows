@@ -9,23 +9,37 @@ name: 'Gemini AI エージェント (Gemini AI Agent Shared Workflow)'
 # 統一パラメータ方針 (Unified Parameters Policy)
 #   - モデル            : gemini/gemini-3.8-flash
 #   - Aider             : aider-chat をバージョン固定でインストール（Python 3.12）
-#   - 依存インストール  : package.json があれば lockfile 自動判定（npm ci / npm install）
-#   - 自動テスト        : --auto-test --test-cmd（失敗時は AI が自己修正。空なら無効）
+#   - 依存インストール  : 検証ジョブで package.json があれば lockfile 自動判定（npm ci / npm install）
+#   - 検証と再修正      : AI の修正（ai-N）と検証（verify-N: Lint → テスト → ビルド）を交互に行い、
+#                         検証が失敗したらそのログを次の回の AI に渡して再修正する（最大 max_fix_rounds 回。上限 3）。
+#                         最後の検証が失敗した場合は Draft PR として作成する
 #   - 429 対策          : 30s → 60s → 120s の指数バックオフで最大 4 回試行
 #   - 対象ファイル指定  : 本文の "Files: a.ts, b.ts" 行を抽出（追跡済みファイルのみ）
 #   - .aiderignore      : 無ければ自動生成（node_modules/ 等をコンテキストから除外）
+#
+# ジョブ構成と実行境界 (Jobs & Execution Boundaries) — PR 修正（gemini-ai-pr-fix-template.yml）と同じ
+#   ジョブ        GitHub トークン   Gemini キー  リポジトリのコード実行
+#   acknowledge   Issue 書込        なし         しない    受付通知
+#   prepare       読み取りのみ      なし         しない    指示文・対象ファイルの抽出、検証コマンドの決定
+#   ai-N          なし              あり         しない    Aider で修正（テストなし、.env / .aider* 設定は退避）
+#   verify-N      なし              なし         する      npm ci と Lint → テスト → ビルド
+#   publish       書き込み          なし         しない    結果を検証し、patch を適用してブランチに push・PR 作成・報告
+#   AI が変更したコード（テストを含む）や依存パッケージは、GITHUB_ENV / GITHUB_PATH / BASH_ENV / .git/config /
+#   プロセスのメモリを通じて同じジョブの後続ステップに影響し得るため、キーとトークンは
+#   コードを実行しない別ジョブ（別ランナー）にだけ渡す。ジョブ間は artifact（patch・ログ）で受け渡す。
 #
 # セキュリティ方針 (Security Policy)
 #   - Issue 本文・コメントは ${{ }} で run: に直接埋め込まず、env 経由で受け渡す
 #     （スクリプトインジェクション対策）。$GITHUB_ENV へはランダムなデリミタで書き込む。
 #   - ボット（*[bot] / sender.type == Bot）による起動を遮断（無限ループ防止）
 #   - コメント起動は author_association が allowed_associations に含まれる場合のみ
-#   - checkout は persist-credentials: false。GITHUB_TOKEN は PR 作成・状況表示の専用ステップに
-#     のみ渡し、Aider 実行ステップ（テストを含む）には渡さない。GEMINI_API_KEY は Aider 実行ステップにのみ渡す。
+#     （ラベルを付けられるのは Triage 以上の権限を持つ人のみ）
+#   - checkout は persist-credentials: false。コードを実行するジョブ（verify）では npm キャッシュを使わない
+#   - .github/workflows/ の変更は作業結果に含めない（GITHUB_TOKEN では push できない）
 #
 # 状況表示 (Status Display)
-#   - acknowledge ジョブが順番待ちの外で即座に 👀 リアクションと状況コメントを投稿
-#   - 状況コメントは 1 件を段階ごとに書き換える（準備中 → 作業中 → 作業完了 → PR 作成）
+#   - acknowledge ジョブが順番待ちの外で即座に 👀 リアクションと状況コメントを投稿し、「作業ジョブで処理中」にする
+#   - 作業系ジョブは状況コメントを書く権限を持たないため、作業中は更新しない。publish が作業完了 → PR 作成 → 完了を表示する
 #   - 完了時に 👀 を 🚀（成功）/ 😕（失敗・中断）へ切り替え、結果は通知のため新規コメントでも知らせる
 #   - Aider のシェルコマンド提案・URL 自動取得は無効化（--yes-always との組合せ対策）
 #
@@ -50,7 +64,7 @@ on:
         type: string
         default: 'gemini-3.8-flash'
       test_command:
-        description: 'Aider が修正後に実行する自動テストコマンド（空なら自動テスト無効）'
+        description: '修正の検証に使うテストコマンド（Lint・ビルドと組み合わせて実行。空ならテストなし）'
         required: false
         type: string
         default: 'npm test'
@@ -60,7 +74,7 @@ on:
         type: string
         default: 'lts/*'
       setup_node:
-        description: 'package.json がある場合に Node.js セットアップと依存インストールを行うか'
+        description: '（互換のため残している入力。現在は未使用。検証ジョブは package.json があれば常に Node.js を準備する）'
         required: false
         type: boolean
         default: true
@@ -79,6 +93,11 @@ on:
         required: false
         type: number
         default: 30
+      max_fix_rounds:
+        description: 'AI による修正と検証の最大往復回数（1〜3）'
+        required: false
+        type: number
+        default: 3
       allowed_associations:
         description: 'コメント起動を許可する author_association（カンマ区切り・空白なし）'
         required: false
@@ -90,7 +109,7 @@ on:
         type: string
         default: '/ai'
       timeout_minutes:
-        description: 'ジョブのタイムアウト（分）。バックオフ待機と自己修正ループを考慮した値'
+        description: 'AI ジョブ 1 回あたりのタイムアウト（分）。バックオフ待機を考慮した値'
         required: false
         type: number
         default: 30
@@ -101,7 +120,7 @@ on:
 
 jobs:
   # 受付通知: concurrency の順番待ちの外で即座に動き、Issue に 👀 と状況コメントを出す。
-  # 起動ガードはこのジョブに置き、run-agent は needs により同じ条件でのみ動く。
+  # 起動ガードはこのジョブに置き、後続のジョブは needs により同じ条件でのみ動く。
   acknowledge:
     name: '受付通知 (Acknowledge Request)'
     # 無限ループ防止: ボット自身のイベントでは起動しない。
@@ -141,82 +160,277 @@ jobs:
           mode: ack
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-  run-agent:
-    name: 'Gemini AI エージェント実行 (Run Gemini AI Agent)'
-    # 起動ガードは acknowledge ジョブで判定済み（スキップ時は needs によりこのジョブもスキップ）
+      # 作業系ジョブは状況コメントを書く権限を持たないため、ここで「作業中」にしておく
+      - name: '状況表示: 作業ジョブで処理中 (Status: Working)'
+        if: ${{ steps.ack.outputs.comment_id != '' }}
+        continue-on-error: true
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent-status@v1
+        with:
+          mode: update
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          status_comment_id: ${{ steps.ack.outputs.comment_id }}
+          headline: '⚙️ 作業ジョブで処理中'
+          detail: '指示内容の解析、AI による修正と検証（Lint → テスト → ビルド。失敗した場合は検証ログをもとに最大 3 回まで再修正）を行っています。同じ Issue で実行中の処理があれば、その準備の完了を待ってから始めます。Gemini API 無料枠の上限（429）に達した場合は自動で待機して再試行します。安全のため作業中は状況を更新しません（数分〜数十分かかります）。進み具合は実行ログで確認できます。'
+
+  # 準備: 指示文と対象ファイルを抽出する。読み取りトークンのみ・リポジトリのコードは実行しない
+  prepare:
+    name: '準備 (Prepare)'
     needs: acknowledge
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout_minutes }}
+    timeout-minutes: 10
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-    # 多重実行防止: 同一 Issue（Issue イベントは常に既定ブランチ上で動くため、
-    # ブランチ単位ではなく Issue 単位で直列化する）。実行中のジョブはキャンセルしない。
-    # queue: max で待機中のリクエストも置き換えずに順番待ちさせる（既定では待機は 1 件のみで、
-    # 後続が来ると待機中のものがキャンセルされる）。
+      contents: read
+    # 多重実行防止: 同一 Issue への依頼は準備（このジョブ）だけを順番に行う。作業ブランチは実行ごとに
+    # 別名のため、後続の ai / verify / publish は直列化しない。実行中のジョブはキャンセルしない。
+    # queue: max で待機中のリクエストも置き換えずに順番待ちさせる（既定では待機は 1 件のみ）。
     # 呼び出し側と同名のグループを使うとデッドロックするため、固有のプレフィックスを付ける。
     concurrency:
       group: gemini-ai-agent-${{ github.repository }}-${{ github.event.issue.number || github.ref }}
       cancel-in-progress: false
       queue: max
-
+    outputs:
+      base_sha: ${{ steps.prepare.outputs.base_sha }}
+      verify_command: ${{ steps.prepare.outputs.verify_command }}
+      target_files: ${{ steps.prepare.outputs.target_files }}
     steps:
       - name: 'コードのチェックアウト (Checkout Repository)'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: ${{ inputs.target_branch || github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: 'lockfile の有無を判定 (Detect Node Project)'
-        id: node_project
-        run: |
-          if [ ! -f package.json ]; then
-            echo "kind=none" >> "$GITHUB_OUTPUT"
-          elif [ -f package-lock.json ]; then
-            echo "kind=lockfile" >> "$GITHUB_OUTPUT"
-          else
-            echo "kind=no-lockfile" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 'Node.js環境のセットアップ (Setup Node.js)'
-        if: ${{ inputs.setup_node && steps.node_project.outputs.kind != 'none' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ inputs.node_version }}
-          cache: ${{ steps.node_project.outputs.kind == 'lockfile' && 'npm' || '' }}
-
-      - name: '依存関係のインストール (Install Dependencies)'
-        if: ${{ inputs.setup_node && steps.node_project.outputs.kind != 'none' }}
-        env:
-          NODE_PROJECT_KIND: ${{ steps.node_project.outputs.kind }}
-        run: |
-          if [ "$NODE_PROJECT_KIND" = "lockfile" ]; then
-            npm ci
-          else
-            echo "package-lock.json が存在しないため npm install を使用します。"
-            # lockfile が無いリポジトリに package-lock.json を作らない（AI の PR に紛れ込むため）
-            npm install --no-package-lock
-          fi
-
-      - name: 'Gemini AI エージェントの実行 (Run Aider Agent & Create PR)'
-        id: agent
+      - name: '指示文と対象ファイルの抽出 (Extract Prompt and Target Files)'
+        id: prepare
         uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent@v1
         with:
+          stage: prepare
           base_branch: ${{ inputs.target_branch || github.event.repository.default_branch }}
-          model_name: ${{ inputs.model_name }}
           test_command: ${{ inputs.test_command }}
+          command_prefix: ${{ inputs.command_prefix }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 1 回目: AI（キーあり・コード実行なし）→ 検証（キーなし・コード実行あり） ----
+  ai-1:
+    name: 'AI による修正 1 回目 (AI Fix Round 1)'
+    needs: prepare
+    if: ${{ inputs.max_fix_rounds >= 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '1'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          commit_message: 'chore(ai): Issue の指示による修正'
+          model_name: ${{ inputs.model_name }}
           aider_version: ${{ inputs.aider_version }}
           max_retries: ${{ inputs.max_retries }}
           initial_delay: ${{ inputs.initial_delay }}
-          command_prefix: ${{ inputs.command_prefix }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  verify-1:
+    name: '修正の検証 1 回目 (Verify Round 1)'
+    needs: [prepare, ai-1]
+    if: ${{ needs.ai-1.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '1'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 2 回目: 1 回目の検証が失敗した場合のみ ----
+  ai-2:
+    name: 'AI による修正 2 回目 (AI Fix Round 2)'
+    needs: [prepare, ai-1, verify-1]
+    if: ${{ needs.verify-1.outputs.status == 'failed' && inputs.max_fix_rounds >= 2 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '2'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          commit_message: 'chore(ai): Issue の指示による修正'
+          model_name: ${{ inputs.model_name }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  verify-2:
+    name: '修正の検証 2 回目 (Verify Round 2)'
+    needs: [prepare, ai-2]
+    if: ${{ needs.ai-2.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '2'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # ---- 3 回目: 2 回目の検証が失敗した場合のみ ----
+  ai-3:
+    name: 'AI による修正 3 回目 (AI Fix Round 3)'
+    needs: [prepare, ai-2, verify-2]
+    if: ${{ needs.verify-2.outputs.status == 'failed' && inputs.max_fix_rounds >= 3 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.ai.outputs.changed }}
+      attempts: ${{ steps.ai.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: 'AI による修正 (AI Fix)'
+        id: ai
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: ai
+          round: '3'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          commit_message: 'chore(ai): Issue の指示による修正'
+          model_name: ${{ inputs.model_name }}
+          aider_version: ${{ inputs.aider_version }}
+          max_retries: ${{ inputs.max_retries }}
+          initial_delay: ${{ inputs.initial_delay }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  verify-3:
+    name: '修正の検証 3 回目 (Verify Round 3)'
+    needs: [prepare, ai-3]
+    if: ${{ needs.ai-3.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.verify.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        name: 'コードのチェックアウト (Checkout Base Commit)'
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+      - name: '修正の検証 (Verify)'
+        id: verify
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-pr-fix@v1
+        with:
+          stage: verify
+          round: '3'
+          head_sha: ${{ needs.prepare.outputs.base_sha }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          node_version: ${{ inputs.node_version }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # 公開: 書き込み権限を持つ。リポジトリのコードは実行せず、作業系ジョブの結果を検証して PR を作る
+  publish:
+    name: '公開 (Publish: Create PR & Report)'
+    needs: [acknowledge, prepare, ai-1, verify-1, ai-2, verify-2, ai-3, verify-3]
+    if: ${{ always() && needs.acknowledge.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      # 作業系ジョブとは別のランナーで、作業の起点のコミットを新しく取得する（状態を引き継がない）
+      - name: 'コードのチェックアウト (Checkout Base Commit)'
+        if: ${{ needs.prepare.result == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: '作業結果の公開 (Publish Work Result)'
+        id: publish
+        if: ${{ needs.prepare.result == 'success' }}
+        uses: masanori-satake/common-workflows/.github/actions/gemini-ai-agent@v1
+        with:
+          stage: publish
+          base_branch: ${{ inputs.target_branch || github.event.repository.default_branch }}
+          base_sha: ${{ needs.prepare.outputs.base_sha }}
+          needs_json: ${{ toJSON(needs) }}
+          max_rounds: ${{ inputs.max_fix_rounds }}
+          verify_command: ${{ needs.prepare.outputs.verify_command }}
+          target_files: ${{ needs.prepare.outputs.target_files }}
+          model_name: ${{ inputs.model_name }}
+          artifact_prefix: ai-issue-${{ github.run_id }}-${{ github.run_attempt }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
 
-      # 状況コメントを最終状態にし、👀 を 🚀（成功）/ 😕（失敗・中断）に切り替える。
-      # 前段（チェックアウト・依存インストール）の失敗やタイムアウト時も実行する。
+      # 状況コメントを最終状態にし、👀 を 🚀（成功）/ 😕（失敗・中断）に切り替える
       - name: '状況表示: 完了 (Status: Finished)'
         if: ${{ always() }}
         continue-on-error: true
@@ -226,12 +440,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           status_comment_id: ${{ needs.acknowledge.outputs.comment_id }}
           reaction_id: ${{ needs.acknowledge.outputs.reaction_id }}
-          result: ${{ steps.agent.outcome == 'success' && (steps.agent.outputs.pr_url != '' && 'pr' || 'nochange') || (steps.agent.outcome == 'cancelled' && 'cancelled' || 'failure') }}
-          pr_url: ${{ steps.agent.outputs.pr_url }}
+          result: ${{ needs.prepare.result == 'cancelled' && 'cancelled' || (steps.publish.outcome == 'success' && (steps.publish.outputs.pr_url != '' && 'pr' || 'nochange') || (steps.publish.outcome == 'cancelled' && 'cancelled' || 'failure')) }}
+          pr_url: ${{ steps.publish.outputs.pr_url }}
 
       # 状況コメントの書き換えでは通知が飛ばないため、失敗は新規コメントで知らせる
       - name: '失敗時の Issue 通知 (Notify Failure on Issue)'
-        if: ${{ failure() && github.event.issue.number }}
+        if: ${{ always() && github.event.issue.number && (needs.prepare.result == 'failure' || steps.publish.outcome == 'failure') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

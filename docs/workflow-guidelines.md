@@ -436,19 +436,29 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 
 ### 15.1 構成
 
-- 共通ワークフロー: `masanori-satake/common-workflows/.github/workflows/gemini-ai-agent-template.yml@v1`
-  （起動ガード・チェックアウト・Node.js 依存インストール・失敗通知）
-- 共通 composite action: `.github/actions/gemini-ai-agent`（処理本体。スクリプトは同ディレクトリに分離）
+- 共通ワークフロー: `masanori-satake/common-workflows/.github/workflows/gemini-ai-agent-template.yml@v1`。
+  15.5 の PR 修正と同じく、ジョブごとに実行境界を分ける
+
+  | ジョブ | GitHub トークン | Gemini キー | リポジトリのコード実行 | 内容 |
+  | :--- | :--- | :--- | :--- | :--- |
+  | `acknowledge` | Issue 書込 | なし | しない | 受付通知（起動ガードもここで判定） |
+  | `prepare` | 読み取りのみ | なし | しない | 指示文・対象ファイルの抽出、検証コマンドの決定（同一 Issue はここだけ直列化） |
+  | `ai-1`〜`ai-3` | なし | あり | しない | Aider で修正（テストなし）。累積の patch を artifact で渡す |
+  | `verify-1`〜`verify-3` | なし | なし | する | patch を適用し、`npm ci` と Lint → テスト → ビルドで検証。失敗時のログを次の回の AI に渡す |
+  | `publish` | 書き込み | なし | しない | 作業結果を検証してブランチに push、PR 作成（最後の検証が失敗なら Draft）、Issue に報告 |
+
+- Issue 固有の composite action: `.github/actions/gemini-ai-agent`（`stage: prepare / publish`）
+  - `extract_request.sh` — 指示文と `Files:` 指定を抽出し、`$GITHUB_ENV` へランダムデリミタで書き出す（`prepare`）
+  - `create_pr.sh` — 適用済みの作業結果をブランチ `chore/ai-issue-<番号>-<run_id>` に push し PR 作成（`publish`）
+- AI による修正と検証は PR 修正の `.github/actions/gemini-ai-pr-fix`（`stage: ai / verify`）を共用し、
+  作業結果の選択と検証は `gemini-ai-pr-publish` の `select_result.sh` / `apply_patch.sh` を共用する
+- 両フローの `ai` ステージから参照する共有スクリプト（配置は `.github/actions/gemini-ai-agent/`）
   - `ensure_aiderignore.sh` — `.aiderignore` が無ければ既定の除外リストを生成
-  - `extract_request.sh` — 指示文と `Files:` 指定を抽出し、`$GITHUB_ENV` へランダムデリミタで書き出す
-  - `run_aider.sh` — 429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）と `--auto-test` による自己修正
-  - `create_pr.sh` — 変更があればブランチ `chore/ai-issue-<番号>-<run_id>` に commit・push し PR 作成
+  - `run_aider.sh` — Aider の実行。429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）、リポジトリの Aider 設定の退避
 - 状況表示 composite action: `.github/actions/gemini-ai-agent-status`（`status_comment.sh`）
-  - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿
-  - 状況コメント 1 件を段階ごとに書き換え（準備中 → 作業中 → 作業完了（試行回数・テスト結果）→ PR 作成 → 完了）
-  - Aider 実行ステップの中では状況を更新しない（429 待機などはリアルタイム表示しない）。更新するのは
-    Aider の前後の専用ステップ（準備中・作業中・作業完了）、PR 作成処理（`create_pr.sh` の「PR を作成中」）、
-    完了ステップ（`finish`）のみ
+  - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿し、「作業ジョブで処理中」にする
+  - 作業系ジョブは状況コメントを書く権限を持たないため、作業中は更新しない。`publish` が
+    作業完了（修正回数・検証結果）→ PR 作成中 → 完了（`finish`）を表示する
   - 完了時に 👀 を 🚀 / 😕 に切り替え。書き換えでは通知が飛ばないため、結果は新規コメントでも知らせる
   - 補助機能のため、API エラーが起きても本体の処理は失敗させない
 - 呼び出し側テンプレート: `templates/<種別>/.github/workflows/ai-coder-trigger.yml`
@@ -458,7 +468,7 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 - Issue に `ai-task` ラベルを付与する、または `/ai <指示>` で始まるコメントを投稿する。
 - 本文に `Files: src/a.ts, src/b.ts` 行を書くと、そのファイルのみを AI に渡し、
   リポジトリマップも無効化してトークン消費を抑える。Git 追跡済みファイルのみ受け付ける。
-- 最終テストが失敗した場合は Draft PR になる。
+- 最後の検証（Lint → `test_command` → ビルド）が失敗した場合は Draft PR になる。
 
 ### 15.3 事前準備
 
@@ -470,8 +480,10 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 
 ### 15.4 セキュリティと制約
 
-- `GITHUB_TOKEN` は Aider 実行ステップに渡さない。同じプロセスツリー内のテストコードは、`unset` 後でも
-  親プロセスの `/proc/<pid>/environ` から読み取れるため、状況更新は前後の専用ステップに分離している。
+- AI が変更したコード（テストを含む）と依存パッケージは、`GITHUB_ENV` / `GITHUB_PATH`（`BASH_ENV` 等）・
+  `.git/config`・同じジョブのプロセスのメモリを通じて同じジョブの後続ステップに影響し得る。そのため
+  `GITHUB_TOKEN` の書き込み権限と `GEMINI_API_KEY` は、コードを実行しない別ジョブ（`publish` / `ai-N`）にだけ渡す。
+  コードを実行する `verify-N` はキーもトークンも持たず、npm キャッシュも使わない。
 - コメント起動は `author_association` が `OWNER` / `MEMBER` / `COLLABORATOR` の場合のみ。
   PR 上のコメントとボットのイベントは無視する（無限ループ防止）。
 - Issue 本文は `env:` 経由で受け渡し、`run:` に `${{ }}` で直接埋め込まない。
@@ -481,9 +493,9 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 - `GITHUB_TOKEN` で作成した PR では CI が自動起動しない（GitHub の仕様）。PR を Close → Reopen して起動する。
 - 呼び出し側にワークフロー単位の `concurrency` を置かない（例外）。`/ai` 以外のコメントで起動しスキップされる
   実行が、待機中の正規の実行を置き換えてキャンセルしてしまうため。多重実行防止は共通ワークフロー側の
-  ジョブ単位（Issue 単位・`cancel-in-progress: false`・`queue: max`）で行う。`queue: max` により、
-  同一 Issue への連続したリクエストもキャンセルされず順番に処理される。
-- `test_command`（Aider の自動テスト・最終テストの両方）には `GEMINI_API_KEY` を渡さない。
+  `prepare` ジョブ（Issue 単位・`cancel-in-progress: false`・`queue: max`）で行う。`queue: max` により、
+  同一 Issue への連続したリクエストもキャンセルされず順番に準備される。作業ブランチは実行ごとに別名のため、
+  後続のジョブは直列化しない。
 - コメント起動時はコメントの指示を先頭に置き、`max_prompt_chars` を超える場合は背景情報の Issue 本文側を切り詰める。
 
 ### 15.5 PR の CI 修正とバージョン更新（`/ai-fix` / `/ai-bump`）
@@ -547,9 +559,8 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
     細工された依存パッケージが混入し得る
   - 公開ジョブは作業系ジョブの出力（修正回数・検証結果・バージョン等）と patch を検証してから使う。
     その代わり、作業中は状況コメントを更新できない（受付ジョブが「作業ジョブで処理中」と表示する）
-  - Issue 用エージェント（`gemini-ai-agent-template.yml`）は、既定ブランチのコードと AI の変更を同じジョブで実行して
-    PR を作成している（`create_pr.sh` は commit / push でフックを無効化しているが、上記の他の経路は残る）。
-    同じジョブ分離の適用は今後の課題
+  - Issue 用エージェント（`gemini-ai-agent-template.yml`）も同じジョブ分離を適用している（15.1）。
+    `ai` / `verify` ステージと、作業結果の選択・検証（`select_result.sh` / `apply_patch.sh`）を共用する
 
 ### 15.6 ヘルプコマンド（`/ai-help`）
 
