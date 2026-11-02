@@ -44,7 +44,7 @@ jobs:
       # VSCode 拡張機能の拡張ホストテストはディスプレイが必要なため xvfb でラップする
       test_command: 'xvfb-run --auto-servernum npm test'
       # 必要に応じてのみ上書きする:
-      # model_name: 'gemini-3.8-flash'
+      # model_name: 'gemini-3.5-flash-lite'
       # target_branch: 'main'
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
