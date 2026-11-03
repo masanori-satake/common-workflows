@@ -454,7 +454,9 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
   作業結果の選択と検証は `gemini-ai-pr-publish` の `select_result.sh` / `apply_patch.sh` を共用する
 - 両フローの `ai` ステージから参照する共有スクリプト（配置は `.github/actions/gemini-ai-agent/`）
   - `ensure_aiderignore.sh` — `.aiderignore` が無ければ既定の除外リストを生成
-  - `run_aider.sh` — Aider の実行。429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回）、リポジトリの Aider 設定の退避
+  - `run_aider.sh` — Aider の実行。429 指数バックオフ再試行（30s → 60s → 120s、最大 4 回。API が返す `retryDelay` より短くは待たない）、
+    1 日あたりの上限（`quotaId` に `PerDay`）や `retryDelay` が 300 秒を超える場合は再試行せずに終了し、種別（`daily` / `long`）を
+    `$RUNNER_TEMP/aider/rate_limit` に書き出す（`ai-N` ジョブが出力 `rate_limit` にし、公開ジョブが失敗の通知文に使う）。リポジトリの Aider 設定の退避
 - 状況表示 composite action: `.github/actions/gemini-ai-agent-status`（`status_comment.sh`）
   - `acknowledge` ジョブ（concurrency の順番待ちの外）が即座に 👀 と状況コメントを投稿し、「作業ジョブで処理中」にする
   - 作業系ジョブは状況コメントを書く権限を持たないため、作業中は更新しない。`publish` が
