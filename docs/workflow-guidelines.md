@@ -579,3 +579,33 @@ GitHub の Issue / コメントを指示文として、Aider + Gemini API（Goog
 - Issue 用エージェントのコメント起動は、`/ai` の直後が空白・改行・終端の場合に限る（`/aider`・`/aihelp` 等は対象外）。
   呼び出し側の `startsWith` は粗い絞り込みのままとし、共通ワークフローの `acknowledge` ジョブの条件で判定する
 - コマンドや運用ルールを追加・変更したら、`post_help.sh` のヘルプ本文と導入ガイドも更新する
+
+---
+
+## 16. ストア提出 (Chrome Web Store / Microsoft Edge Add-ons)
+
+Chrome 拡張機能のストア提出（アップロード → 審査・認証への提出）を共通化する。
+GitHub Release の作成は `base-release.yml` の担当であり、本ワークフローとは別の
+実行として併用する（タグ push で Release、手動実行でストア提出）。
+
+- 共通ワークフロー: `masanori-satake/common-workflows/.github/workflows/base-release-chrome.yml@v1`
+- 呼び出し側テンプレート: `templates/chrome-extension/.github/workflows/store-release.yml`
+- 動作:
+  1. `package` ジョブが提出 ZIP を1回だけ作成する（`package_source_dir` 指定時は
+     `package-extension` action で統一命名、未指定時はビルド成果物の `release_files` 先頭1件）
+  2. `chrome` / `edge` ジョブが ZIP を受け取り、それぞれ独立に提出する。
+     片側の失敗はもう片側に影響しない
+  3. 提出先は入力 `stores`（`both` / `chrome` / `edge`）で実行時に選ぶ。
+     既定値は呼び出し側（リポジトリごと）に持たせ、Edge の初回提出が済んでいない
+     拡張では `chrome` を既定にして誤提出を防ぐ
+- Secrets（呼び出し側リポジトリに登録し、`secrets: inherit` で渡す）:
+  - `CHROME_WEBSTORE_SA_KEY_JSON` — Chrome Web Store API 用サービスアカウント鍵 (JSON)
+  - `EDGE_API_KEY` / `EDGE_CLIENT_ID` — Partner Center の Publish API 資格情報 (v1.1)
+- ストア側の前提（初回のみ手動。API では代替できない）:
+  - Chrome: アイテムの作成、サービスアカウントの発行者への登録
+    （GCP で Chrome Web Store API と IAM Service Account Credentials API を有効化し、
+    サービスアカウント自身へ Token Creator を付与したうえで、開発者ダッシュボードの
+    **対象発行者**の設定「サービス アカウント」に登録する。発行者を取り違えると 403 になる）
+  - Edge: Partner Center での初回提出と製品 ID (GUID) の発行、Publish API 資格情報の作成
+- Chrome の `publish` は審査提出まで、Edge の `publish` は認証への提出まで。
+  公開は各ストアの審査・認証の通過後に行われる

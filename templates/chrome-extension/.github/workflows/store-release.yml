@@ -1,0 +1,39 @@
+name: 'ストア提出 (Store Release)'
+
+on:
+  workflow_dispatch:
+    inputs:
+      stores:
+        description: '提出先ストア'
+        required: true
+        type: choice
+        options:
+          - both
+          - chrome
+          - edge
+        # 既定値はリポジトリごとに決める。Edge の初回提出が済んでいない間は
+        # chrome を既定にし、誤って Edge へ投げる事故を防ぐこと。
+        default: 'both'
+
+# 提出の直列化は base 側（ストア別ジョブの concurrency）で行うため、
+# 呼び出し側に concurrency は置かない（実行中の提出をキャンセルしない）。
+
+jobs:
+  store-release:
+    name: '共通ストア提出実行 (Execute Base Store Release)'
+    uses: masanori-satake/common-workflows/.github/workflows/base-release-chrome.yml@v1
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      stores: ${{ inputs.stores }}
+      # リポジトリごとに必須: Chrome Web Store のアイテム ID（拡張機能 ID と同一）
+      chrome_item_id: ''
+      # Edge に出す場合のみ: Partner Center の製品 ID (GUID)。初回提出後に発行される
+      edge_product_id: ''
+      # 提出 ZIP の作り方（base-release.yml と同じ指定方法）:
+      #   - npm run build が releases/*.zip を生成するリポジトリは指定不要
+      #   - 素材ディレクトリから base 側で ZIP を作る場合は package_source_dir を指定する
+      # package_source_dir: 'projects/app'
+      # Edge の認証担当者向けメモが必要な場合:
+      # edge_notes: ''
