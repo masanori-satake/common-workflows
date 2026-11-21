@@ -1,0 +1,590 @@
+name: 'Chrome/Edge ストア提出 (Base Release for Chrome/Edge Stores)'
+
+# =============================================================================
+# 統一パラメータ方針 (Unified Parameters Policy)
+# -----------------------------------------------------------------------------
+#   - project_name      : リポジトリ名を自動採用（github.event.repository.name）
+#   - Node.js           : lts/*
+#   - 依存インストール  : lockfile の有無で自動判定（base-release.yml と同一方式）
+#   - 提出 ZIP          : package_source_dir 指定時は base-release.yml と同じ
+#                         package-extension action で {project_name}-v{version}.zip を生成。
+#                         未指定時はビルド成果物から release_files（既定 releases/*.zip）の
+#                         先頭1件を使用する（GitHub Release 用 ZIP と同一物を提出するため）
+#   - 同時実行制御      : ストア別ジョブ単位で直列化し、実行中の提出はキャンセルしない
+#
+# シークレットは呼出側の secrets: inherit で受領する:
+#   - CHROME_WEBSTORE_SA_KEY_JSON : Chrome Web Store API 用サービスアカウント鍵 (JSON)
+#   - EDGE_API_KEY                : Microsoft Edge Add-ons API (v1.1) の API キー
+#   - EDGE_CLIENT_ID              : Microsoft Edge Add-ons API (v1.1) のクライアント ID
+#
+# 既有 base-release.yml との差異:
+#   - base-release.yml は GitHub Release の作成専用。本ワークフローはストア提出専用で、
+#     GitHub Release は作成しない（タグ push 時の release-package.yml と併用する）
+#   - パッケージ作成は先行ジョブで1回だけ行い、ストア別ジョブが並行して受け取る。
+#     片側の失敗はもう片側に影響しない
+#
+# ストア側の前提（初回のみ手動。API では代替できない）:
+#   - Chrome: ダッシュボードでアイテムを作成済みであること。サービスアカウントは
+#     GCP 側で Chrome Web Store API + IAM Service Account Credentials API を有効化し、
+#     サービスアカウント自身へ Token Creator を付与したうえで、開発者ダッシュボードの
+#     発行者設定「サービス アカウント」に登録する（発行者を間違えると 403 になる）
+#   - Edge  : Partner Center で初回提出を済ませ、製品 ID (GUID) が発行されていること。
+#     Publish API ページで API 資格情報（Client ID + API キー）を作成済みであること
+#
+# 注意:
+#   - Chrome の upload は manifest の version を上げていないと失敗する（ストア仕様）
+#   - Chrome の publish は「審査提出」まで。公開は審査通過後にストア側で行われる
+#   - Edge の publish は「認証 (certification) への提出」まで。公開は認証通過後
+# =============================================================================
+
+on:
+  workflow_call:
+    inputs:
+      stores:
+        description: '提出先ストア（both / chrome / edge）。リポジトリごとの既定は呼び出し側で指定する'
+        required: false
+        type: string
+        default: 'both'
+      project_name:
+        description: 'プロジェクト識別名（ZIPファイル名プレフィックス。統一値: リポジトリ名）'
+        required: false
+        type: string
+        default: ${{ github.event.repository.name }}
+      package_source_dir:
+        description: '提出 ZIP に含める素材ディレクトリ。指定時は base 側で {project_name}-v{version}.zip を生成する。空の場合は release_files を使用する'
+        required: false
+        type: string
+        default: ''
+      release_files:
+        description: 'package_source_dir 未指定時に使用する既存 ZIP のグロブ（統一値: releases/*.zip）。先頭1件を提出する'
+        required: false
+        type: string
+        default: 'releases/*.zip'
+      manifest_rename:
+        description: 'ZIP 内でのファイルリネーム（package_source_dir 指定時のみ有効）。形式 "元ファイル名:新ファイル名"'
+        required: false
+        type: string
+        default: ''
+      generate_icons:
+        description: 'ビルド前に SVG から PNG アイコンを生成するか（generate-icons composite action を使用）'
+        required: false
+        type: boolean
+        default: false
+      icon_svg_path:
+        description: 'アイコン生成の入力 SVG パス'
+        required: false
+        type: string
+        default: 'projects/app/assets/icon.svg'
+      icon_output_dir:
+        description: 'アイコン生成の出力ディレクトリ'
+        required: false
+        type: string
+        default: 'projects/app/icons'
+      node_version:
+        description: '使用するNode.jsのバージョン（統一値: lts/*）'
+        required: false
+        type: string
+        default: 'lts/*'
+      install_command:
+        description: '依存関係のインストールコマンド。空文字の場合は lockfile の有無で自動判定する（base-release.yml と同一方式）'
+        required: false
+        type: string
+        default: ''
+      chrome_publisher_id:
+        description: 'Chrome Web Store の発行者 ID（統一値: Masa.Satake の発行者 ID）'
+        required: false
+        type: string
+        default: '6ee46d3f-8a1c-4ef2-99c9-29c0b366b9fa'
+      chrome_item_id:
+        description: 'Chrome Web Store のアイテム ID（拡張機能 ID と同一）。chrome 提出時は必須'
+        required: false
+        type: string
+        default: ''
+      edge_product_id:
+        description: 'Microsoft Edge Add-ons の製品 ID (GUID)。edge 提出時は必須'
+        required: false
+        type: string
+        default: ''
+      edge_notes:
+        description: 'Edge の認証担当者向けメモ（Notes for certification、平文）。空なら空で提出する'
+        required: false
+        type: string
+        default: ''
+    outputs:
+      version:
+        description: '抽出されたバージョン番号 (例: 1.2.0)'
+        value: ${{ jobs.package.outputs.version }}
+
+jobs:
+  package:
+    name: '提出用パッケージ作成 (Build Submission Package)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+      zip_name: ${{ steps.package.outputs.zip_name }}
+
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 'lockfile の有無を判定 (Detect Lockfile)'
+        id: lockfile
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js, with cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'true' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+
+      - name: 'Node.js環境のセットアップ (Setup Node.js, no cache)'
+        if: ${{ steps.lockfile.outputs.exists == 'false' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: 'アイコン生成 (Generate PNG Icons)'
+        if: ${{ inputs.generate_icons }}
+        uses: masanori-satake/common-workflows/.github/actions/generate-icons@v1
+        with:
+          svg_path: ${{ inputs.icon_svg_path }}
+          output_dir: ${{ inputs.icon_output_dir }}
+          python_version: '3.12'
+
+      - name: '依存関係のインストールとビルド (Install & Build)'
+        env:
+          INSTALL_COMMAND: ${{ inputs.install_command }}
+          LOCKFILE_EXISTS: ${{ steps.lockfile.outputs.exists }}
+        run: |
+          if [ -n "$INSTALL_COMMAND" ]; then
+            echo "明示指定されたコマンドを実行します: $INSTALL_COMMAND"
+            eval "$INSTALL_COMMAND"
+          elif [ "$LOCKFILE_EXISTS" = "true" ]; then
+            npm ci
+          else
+            echo "package-lock.json が存在しないため npm install を使用します。"
+            npm install
+          fi
+          npm run build --if-present
+
+      - name: 'バージョン情報の自動抽出 (Extract Version from Manifest/Package)'
+        id: extract_version
+        run: |
+          node -e '
+            const fs = require("fs");
+            let version = "";
+            const candidates = [
+              "projects/app/manifest.json",
+              "manifest.json",
+              "package.json",
+            ];
+            let source = "";
+            for (const file of candidates) {
+              if (fs.existsSync(file)) {
+                version = JSON.parse(fs.readFileSync(file, "utf8")).version;
+                source = file;
+                break;
+              }
+            }
+            if (!source) {
+              console.error("Error: No manifest.json or package.json was found.");
+              process.exit(1);
+            }
+            if (!version) {
+              console.error(`Error: Version field is missing in ${source}.`);
+              process.exit(1);
+            }
+            console.log(`Source: ${source}`);
+            console.log(`Extracted Version: ${version}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          '
+
+      - name: '提出用アーカイブの作成 (Create Submission ZIP - unified naming)'
+        id: package_unified
+        if: ${{ inputs.package_source_dir != '' }}
+        uses: masanori-satake/common-workflows/.github/actions/package-extension@v1
+        with:
+          source_dir: ${{ inputs.package_source_dir }}
+          zip_name: ${{ inputs.project_name }}-v${{ steps.extract_version.outputs.version }}.zip
+          manifest_rename: ${{ inputs.manifest_rename }}
+
+      - name: '提出用アーカイブの解決 (Resolve Submission ZIP - existing build output)'
+        id: package_legacy
+        if: ${{ inputs.package_source_dir == '' }}
+        env:
+          RELEASE_FILES: ${{ inputs.release_files }}
+        run: |
+          # shellcheck disable=SC2086
+          set -- $RELEASE_FILES
+          if [ ! -f "$1" ]; then
+            echo "Error: release_files (${RELEASE_FILES}) に一致する ZIP がありません。ビルドで ZIP が生成されているか確認してください。"
+            exit 1
+          fi
+          if [ $# -gt 1 ]; then
+            echo "Warning: 複数の ZIP が一致しました。先頭の $1 を使用します。"
+          fi
+          echo "zip_name=$1" >> "$GITHUB_OUTPUT"
+
+      - name: 'アセットファイル名の確定 (Resolve Asset File Name)'
+        id: package
+        env:
+          UNIFIED: ${{ steps.package_unified.outputs.zip_name }}
+          LEGACY: ${{ steps.package_legacy.outputs.zip_name }}
+        run: |
+          if [ -n "$UNIFIED" ]; then
+            echo "zip_name=${UNIFIED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "zip_name=${LEGACY}" >> "$GITHUB_OUTPUT"
+          fi
+          ls -la "${UNIFIED:-$LEGACY}"
+
+      - name: '提出用パッケージのアップロード (Upload Submission Package Artifact)'
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-package
+          path: ${{ steps.package.outputs.zip_name }}
+          retention-days: 1
+
+      - name: '実行結果サマリーの出力 (Output Step Summary)'
+        if: always()
+        run: |
+          cat << 'EOF' >> $GITHUB_STEP_SUMMARY
+          ### 📦 提出用パッケージ作成結果 (Submission Package Summary)
+
+          | 項目 (Item) | 設定値 (Value) |
+          | :--- | :--- |
+          | **抽出バージョン (Version)** | `${{ steps.extract_version.outputs.version }}` |
+          | **提出 ZIP (Package)** | `${{ steps.package.outputs.zip_name }}` |
+          | **提出先 (Stores)** | `${{ inputs.stores }}` |
+          EOF
+
+  chrome:
+    name: 'Chrome Web Store へ提出 (Submit to Chrome Web Store)'
+    needs: package
+    if: ${{ inputs.stores == 'both' || inputs.stores == 'chrome' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # 提出処理の途中キャンセルで部分的な提出状態になるのを防ぐ（リポジトリ単位で直列化）
+    concurrency:
+      group: store-release-chrome-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: '提出用パッケージのダウンロード (Download Submission Package)'
+        uses: actions/download-artifact@v4
+        with:
+          name: store-package
+
+      - name: '入力の検証 (Validate Inputs)'
+        env:
+          ITEM_ID: ${{ inputs.chrome_item_id }}
+          PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
+        run: |
+          if [ -z "$ITEM_ID" ]; then
+            echo "Error: chrome_item_id が未指定です。呼び出し側の with: でアイテム ID を指定してください。"
+            exit 1
+          fi
+          if [ -z "$PUBLISHER_ID" ]; then
+            echo "Error: chrome_publisher_id が未指定です。"
+            exit 1
+          fi
+          ls -la *.zip
+
+      - name: 'Google Cloud への認証 (Authenticate to Google Cloud)'
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CHROME_WEBSTORE_SA_KEY_JSON }}
+          token_format: access_token
+          # upload / publish は書き込みスコープが必要（読み取り専用スコープでは提出できない）
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+
+      - name: 'パッケージのアップロード (Upload Package)'
+        id: upload
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
+          ITEM_ID: ${{ inputs.chrome_item_id }}
+        run: |
+          set -uo pipefail
+          ZIP_FILE=$(ls *.zip | head -n 1)
+          echo "Uploading: ${ZIP_FILE}"
+          HTTP_CODE=$(curl -sS -o upload-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@${ZIP_FILE}" \
+            "https://chromewebstore.googleapis.com/upload/v2/publishers/${PUBLISHER_ID}/items/${ITEM_ID}:upload")
+          echo "HTTP status: ${HTTP_CODE}"
+          cat upload-response.json; echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: アップロードが HTTP ${HTTP_CODE} で失敗しました。応答本文を確認してください。"
+            exit 1
+          fi
+          UPLOAD_STATE=$(jq -r '.uploadState // "UNKNOWN"' upload-response.json)
+          echo "upload_state=${UPLOAD_STATE}" >> "$GITHUB_OUTPUT"
+          echo "Upload state: ${UPLOAD_STATE}"
+          if [ "$UPLOAD_STATE" = "FAILURE" ]; then
+            echo "Error: アップロード処理が FAILURE になりました。manifest の version が上がっているか確認してください。"
+            exit 1
+          fi
+
+      - name: 'アップロード完了の待機 (Wait for Upload to Finish)'
+        if: ${{ steps.upload.outputs.upload_state == 'IN_PROGRESS' }}
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
+          ITEM_ID: ${{ inputs.chrome_item_id }}
+        run: |
+          set -uo pipefail
+          # 最大 約5分（20回 × 15秒）ポーリングする
+          for i in $(seq 1 20); do
+            curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+              "https://chromewebstore.googleapis.com/v2/publishers/${PUBLISHER_ID}/items/${ITEM_ID}:fetchStatus" \
+              -o status-response.json
+            STATE=$(jq -r '.lastAsyncUploadState // .draftItemRevisionStatus.state // "UNKNOWN"' status-response.json)
+            echo "Poll ${i}: upload state = ${STATE}"
+            case "$STATE" in
+              IN_PROGRESS)
+                sleep 15 ;;
+              FAILURE|FAILED)
+                cat status-response.json; echo
+                echo "Error: アップロード処理が失敗しました。"
+                exit 1 ;;
+              *)
+                break ;;
+            esac
+            if [ "$i" = "20" ]; then
+              echo "Error: アップロードが制限時間内に完了しませんでした。"
+              exit 1
+            fi
+          done
+
+      - name: '審査への提出 (Publish - Submit for Review)'
+        id: publish
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
+          ITEM_ID: ${{ inputs.chrome_item_id }}
+        run: |
+          set -uo pipefail
+          HTTP_CODE=$(curl -sS -o publish-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://chromewebstore.googleapis.com/v2/publishers/${PUBLISHER_ID}/items/${ITEM_ID}:publish")
+          echo "HTTP status: ${HTTP_CODE}"
+          cat publish-response.json; echo
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Error: 審査提出が HTTP ${HTTP_CODE} で失敗しました。応答本文を確認してください。"
+            exit 1
+          fi
+
+      - name: '提出後の状態確認 (Fetch Status after Submission)'
+        if: always()
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
+          ITEM_ID: ${{ inputs.chrome_item_id }}
+        run: |
+          curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://chromewebstore.googleapis.com/v2/publishers/${PUBLISHER_ID}/items/${ITEM_ID}:fetchStatus" \
+            -o final-status.json || true
+          jq . final-status.json || cat final-status.json
+          STATE=$(jq -r '.state // "UNKNOWN"' final-status.json 2>/dev/null || echo "UNKNOWN")
+          {
+            echo "### 🟢 Chrome Web Store 提出結果 (Chrome Web Store Submission)"
+            echo ""
+            echo "| 項目 (Item) | 設定値 (Value) |"
+            echo "| :--- | :--- |"
+            echo "| **アイテム ID (Item ID)** | \`${ITEM_ID}\` |"
+            echo "| **バージョン (Version)** | \`${{ needs.package.outputs.version }}\` |"
+            echo "| **アイテム状態 (State)** | \`${STATE}\` |"
+            echo ""
+            echo "審査提出まで完了しました。公開は審査通過後にストア側で行われます。"
+          } >> $GITHUB_STEP_SUMMARY
+
+  edge:
+    name: 'Microsoft Edge Add-ons へ提出 (Submit to Microsoft Edge Add-ons)'
+    needs: package
+    if: ${{ inputs.stores == 'both' || inputs.stores == 'edge' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    concurrency:
+      group: store-release-edge-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: '提出用パッケージのダウンロード (Download Submission Package)'
+        uses: actions/download-artifact@v4
+        with:
+          name: store-package
+
+      - name: '入力と資格情報の検証 (Validate Inputs & Credentials)'
+        env:
+          PRODUCT_ID: ${{ inputs.edge_product_id }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+        run: |
+          if [ -z "$PRODUCT_ID" ]; then
+            echo "Error: edge_product_id が未指定です。呼び出し側の with: で製品 ID を指定してください。"
+            exit 1
+          fi
+          if [ -z "$EDGE_API_KEY" ] || [ -z "$EDGE_CLIENT_ID" ]; then
+            echo "Error: Secrets EDGE_API_KEY / EDGE_CLIENT_ID が未設定です。Partner Center の Publish API ページで資格情報を作成し、リポジトリ Secrets に登録してください。"
+            exit 1
+          fi
+          ls -la *.zip
+
+      - name: 'パッケージのアップロード (Upload Package to Draft)'
+        id: upload
+        env:
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          PRODUCT_ID: ${{ inputs.edge_product_id }}
+        run: |
+          set -uo pipefail
+          ZIP_FILE=$(ls *.zip | head -n 1)
+          echo "Uploading: ${ZIP_FILE}"
+          HTTP_CODE=$(curl -sS -D upload-headers.txt -o upload-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+            -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@${ZIP_FILE}" \
+            "https://api.addons.microsoftedge.microsoft.com/v1/products/${PRODUCT_ID}/submissions/draft/package")
+          echo "HTTP status: ${HTTP_CODE}"
+          cat upload-response.json; echo
+          if [ "$HTTP_CODE" != "202" ]; then
+            echo "Error: アップロードが HTTP ${HTTP_CODE} で失敗しました。応答本文を確認してください。"
+            exit 1
+          fi
+          LOCATION=$(grep -i '^location:' upload-headers.txt | tr -d '\r' | awk '{print $2}')
+          if [ -z "$LOCATION" ]; then
+            echo "Error: Location ヘッダー（operation ID）が応答にありません。"
+            exit 1
+          fi
+          echo "location=${LOCATION}" >> "$GITHUB_OUTPUT"
+          echo "Operation: ${LOCATION}"
+
+      - name: 'アップロード完了の待機 (Wait for Upload Operation)'
+        env:
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          PRODUCT_ID: ${{ inputs.edge_product_id }}
+          LOCATION: ${{ steps.upload.outputs.location }}
+        run: |
+          set -uo pipefail
+          # Location が URL の場合はそのまま、ID の場合は operations URL を組み立てる
+          case "$LOCATION" in
+            http*) OP_URL="$LOCATION" ;;
+            *) OP_URL="https://api.addons.microsoftedge.microsoft.com/v1/products/${PRODUCT_ID}/submissions/draft/package/operations/${LOCATION}" ;;
+          esac
+          # 最大 約8分（32回 × 15秒）ポーリングする
+          for i in $(seq 1 32); do
+            curl -sS -H "Authorization: ApiKey ${EDGE_API_KEY}" -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+              "$OP_URL" -o operation-response.json
+            STATUS=$(jq -r '.status // "UNKNOWN"' operation-response.json)
+            echo "Poll ${i}: operation status = ${STATUS}"
+            case "$STATUS" in
+              Succeeded) break ;;
+              Failed)
+                cat operation-response.json; echo
+                echo "Error: アップロード処理が Failed になりました。"
+                exit 1 ;;
+              *) sleep 15 ;;
+            esac
+            if [ "$i" = "32" ]; then
+              echo "Error: アップロードが制限時間内に完了しませんでした。"
+              exit 1
+            fi
+          done
+
+      - name: '認証への提出 (Publish - Submit for Certification)'
+        id: publish
+        env:
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          PRODUCT_ID: ${{ inputs.edge_product_id }}
+          EDGE_NOTES: ${{ inputs.edge_notes }}
+        run: |
+          set -uo pipefail
+          HTTP_CODE=$(curl -sS -D publish-headers.txt -o publish-response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: ApiKey ${EDGE_API_KEY}" \
+            -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+            -H "Content-Type: text/plain" \
+            --data-binary "$EDGE_NOTES" \
+            "https://api.addons.microsoftedge.microsoft.com/v1/products/${PRODUCT_ID}/submissions")
+          echo "HTTP status: ${HTTP_CODE}"
+          cat publish-response.json; echo
+          if [ "$HTTP_CODE" != "202" ]; then
+            echo "Error: 認証への提出が HTTP ${HTTP_CODE} で失敗しました。応答本文を確認してください。"
+            exit 1
+          fi
+          LOCATION=$(grep -i '^location:' publish-headers.txt | tr -d '\r' | awk '{print $2}')
+          if [ -z "$LOCATION" ]; then
+            echo "Error: Location ヘッダー（operation ID）が応答にありません。"
+            exit 1
+          fi
+          echo "location=${LOCATION}" >> "$GITHUB_OUTPUT"
+          echo "Operation: ${LOCATION}"
+
+      - name: '提出完了の待機 (Wait for Publish Operation)'
+        if: always() && steps.publish.outputs.location != ''
+        env:
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          PRODUCT_ID: ${{ inputs.edge_product_id }}
+          LOCATION: ${{ steps.publish.outputs.location }}
+        run: |
+          set -uo pipefail
+          case "$LOCATION" in
+            http*) OP_URL="$LOCATION" ;;
+            *) OP_URL="https://api.addons.microsoftedge.microsoft.com/v1/products/${PRODUCT_ID}/submissions/operations/${LOCATION}" ;;
+          esac
+          FINAL_STATUS="UNKNOWN"
+          for i in $(seq 1 32); do
+            curl -sS -H "Authorization: ApiKey ${EDGE_API_KEY}" -H "X-ClientID: ${EDGE_CLIENT_ID}" \
+              "$OP_URL" -o publish-operation.json
+            STATUS=$(jq -r '.status // "UNKNOWN"' publish-operation.json)
+            echo "Poll ${i}: publish operation status = ${STATUS}"
+            FINAL_STATUS="$STATUS"
+            case "$STATUS" in
+              Succeeded) break ;;
+              Failed)
+                cat publish-operation.json; echo
+                echo "Error: 提出処理が Failed になりました。"
+                exit 1 ;;
+              *) sleep 15 ;;
+            esac
+            if [ "$i" = "32" ]; then
+              echo "Error: 提出が制限時間内に完了しませんでした。"
+              exit 1
+            fi
+          done
+          {
+            echo "### 🔵 Microsoft Edge Add-ons 提出結果 (Edge Add-ons Submission)"
+            echo ""
+            echo "| 項目 (Item) | 設定値 (Value) |"
+            echo "| :--- | :--- |"
+            echo "| **製品 ID (Product ID)** | \`${PRODUCT_ID}\` |"
+            echo "| **バージョン (Version)** | \`${{ needs.package.outputs.version }}\` |"
+            echo "| **提出オペレーション (Operation)** | \`${FINAL_STATUS}\` |"
+            echo ""
+            echo "認証への提出まで完了しました。公開は認証通過後にストア側で行われます。"
+          } >> $GITHUB_STEP_SUMMARY
