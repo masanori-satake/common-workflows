@@ -29,6 +29,8 @@ jobs:
       stores: ${{ inputs.stores }}
       # リポジトリごとに必須: Chrome Web Store のアイテム ID（拡張機能 ID と同一）
       chrome_item_id: ''
+      # Chrome を公開しない（下書き更新のみ）場合は、アップロードのみに切り替える:
+      # chrome_publish: false
       # Edge に出す場合のみ: Partner Center の製品 ID (GUID)。初回提出後に発行される
       edge_product_id: ''
       # 提出 ZIP の作り方（base-release.yml と同じ指定方法）:
