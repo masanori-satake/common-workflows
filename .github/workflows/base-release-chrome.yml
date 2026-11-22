@@ -34,6 +34,8 @@ name: 'Chrome/Edge ストア提出 (Base Release for Chrome/Edge Stores)'
 # 注意:
 #   - Chrome の upload は manifest の version を上げていないと失敗する（ストア仕様）
 #   - Chrome の publish は「審査提出」まで。公開は審査通過後にストア側で行われる
+#   - Chrome は入力 chrome_publish を false にするとアップロードのみで止められる
+#     （下書きは更新されるが審査には出ない。公開中止のアイテム用）
 #   - Edge の publish は「認証 (certification) への提出」まで。公開は認証通過後
 # =============================================================================
 
@@ -100,6 +102,11 @@ on:
         required: false
         type: string
         default: ''
+      chrome_publish:
+        description: 'Chrome の審査提出（publish）まで行うか。false の場合はアップロードのみで下書きを更新し、審査には出さない（公開中止のアイテム用）'
+        required: false
+        type: boolean
+        default: true
       edge_product_id:
         description: 'Microsoft Edge Add-ons の製品 ID (GUID)。edge 提出時は必須'
         required: false
@@ -374,6 +381,7 @@ jobs:
           done
 
       - name: '審査への提出 (Publish - Submit for Review)'
+        if: ${{ inputs.chrome_publish }}
         id: publish
         env:
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
@@ -395,6 +403,7 @@ jobs:
       - name: '提出後の状態確認 (Fetch Status after Submission)'
         if: always()
         env:
+          CHROME_PUBLISH: ${{ inputs.chrome_publish }}
           ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
           PUBLISHER_ID: ${{ inputs.chrome_publisher_id }}
           ITEM_ID: ${{ inputs.chrome_item_id }}
@@ -413,7 +422,11 @@ jobs:
             echo "| **バージョン (Version)** | \`${{ needs.package.outputs.version }}\` |"
             echo "| **アイテム状態 (State)** | \`${STATE}\` |"
             echo ""
-            echo "審査提出まで完了しました。公開は審査通過後にストア側で行われます。"
+            if [ "$CHROME_PUBLISH" = "true" ]; then
+              echo "審査提出まで完了しました。公開は審査通過後にストア側で行われます。"
+            else
+              echo "アップロードのみ完了しました。下書きは更新されましたが、審査には提出していません（公開されません）。"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
   edge:

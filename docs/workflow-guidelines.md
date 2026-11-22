@@ -609,3 +609,6 @@ GitHub Release の作成は `base-release.yml` の担当であり、本ワーク
   - Edge: Partner Center での初回提出と製品 ID (GUID) の発行、Publish API 資格情報の作成
 - Chrome の `publish` は審査提出まで、Edge の `publish` は認証への提出まで。
   公開は各ストアの審査・認証の通過後に行われる
+- Chrome には入力 `chrome_publish`（既定 `true`）がある。`false` にすると
+  アップロードのみで止まり、下書きだけが更新されて審査には出ない。
+  公開中止のアイテム（例: ServiceRoute-Solo）の下書き更新はこの指定で行う
