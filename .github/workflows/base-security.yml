@@ -9,6 +9,9 @@ name: '共通セキュリティスキャン (Base Security)'
 #   - OSV-Scanner       : 既定で実行（Solo 全プロジェクトで利用）
 #                         OSV のバージョンを本ファイルで一元管理し、各リポジトリの
 #                         参照バージョンのばらつきを解消する
+#                         呼び出し側が --config で指定する .github/osv-scanner.toml が
+#                         リポジトリに無い場合は、共通の既定設定（devDependencies を
+#                         合否判定から除外）を自動で用意してからスキャンする
 #   - OSV スキャン対象  : ./projects と ./package.json（再帰）
 #
 # 注意: 旧実装の `npm audit --if-present` は npm audit に存在しないフラグのため
@@ -83,11 +86,79 @@ jobs:
   osv-scan:
     name: 'OSV-Scanner による脆弱性検査 (Vulnerability Scan)'
     if: ${{ inputs.enable_osv_scan }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       actions: read
       security-events: write
       contents: read
-    # OSV バージョンをエコシステム全体で一元管理する
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v1.9.1
-    with:
-      scan-args: ${{ inputs.osv_scan_args }}
+    # OSV バージョンをエコシステム全体で一元管理する。
+    # 以前は google/osv-scanner-action の再利用可能ワークフローを呼んでいたが、
+    # 設定ファイルの用意を挟むため、同ワークフローと同等のステップをここに展開する。
+    steps:
+      - name: 'コードのチェックアウト (Checkout Code)'
+        uses: actions/checkout@v4
+
+      # 呼び出し側が --config=./.github/osv-scanner.toml を指定していても、
+      # ファイルが無いリポジトリではスキャナが起動できずに失敗していた。
+      # 無い場合は共通の既定設定を用意し、スキャンが必ず動くようにする。
+      # ファイルがあるリポジトリでは何もしない（その設定がそのまま使われる）。
+      - name: 'OSV-Scanner 設定の用意 (Ensure OSV-Scanner Config)'
+        run: |
+          if [ ! -f .github/osv-scanner.toml ]; then
+            echo '::notice::.github/osv-scanner.toml が無いため、共通の既定設定を使用します'
+            mkdir -p .github
+            cat > .github/osv-scanner.toml << 'EOF'
+          # OSV-Scanner 設定 (OSV-Scanner Configuration)
+          #
+          # security-scan.yml から --config=./.github/osv-scanner.toml で読み込む。
+          # VSIX に同梱されない devDependencies（vsce / mocha / eslint などの開発ツール）の
+          # 脆弱性は CI を失敗させない。拡張機能本体に同梱される dependencies は従来どおり検査する。
+          # npm audit 側の --omit=dev（security-scan.yml の audit_omit_dev: true）と方針を揃えている。
+
+          [[PackageOverrides]]
+          ecosystem = "npm"
+          group = "dev"
+          vulnerability.ignore = true
+          reason = "devDependencies は VSIX に同梱されないため、CI の合否判定から除外する"
+          EOF
+          fi
+
+      - name: 'OSV-Scanner の実行 (Run OSV-Scanner)'
+        uses: google/osv-scanner-action/osv-scanner-action@cbb0295db259bba04d38625792c18646ed18bc89 # v1.9.1
+        with:
+          scan-args: |-
+            --output=results.json
+            --format=json
+            ${{ inputs.osv_scan_args }}
+        continue-on-error: true
+
+      - name: 'OSV-Scanner レポーターの実行 (Run OSV-Scanner Reporter)'
+        uses: google/osv-scanner-action/osv-reporter-action@cbb0295db259bba04d38625792c18646ed18bc89 # v1.9.1
+        with:
+          scan-args: |-
+            --output=results.sarif
+            --new=results.json
+            --gh-annotations=false
+            --fail-on-vuln=true
+
+      - name: 'SARIF ファイルのアップロード (Upload SARIF Artifact)'
+        id: upload_artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: 'コードスキャンへのアップロード (Upload to Code Scanning)'
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@f09c1c0a94de965c15400f5634aa42fac8fb8f88 # v3.27.5
+        with:
+          sarif_file: results.sarif
+
+      - name: 'アップロード失敗時の案内 (Error Troubleshooter)'
+        if: ${{ always() && steps.upload_artifact.outcome == 'failure' }}
+        run: |
+          echo "::error::Artifact upload failed. This is most likely caused by a error during scanning earlier in the workflow."
+          exit 1

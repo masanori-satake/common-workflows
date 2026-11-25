@@ -35,6 +35,7 @@ jobs:
       # VSCode 拡張機能は ./projects ディレクトリを持たないため、
       # ルートの package.json / package-lock.json のみをスキャン対象とする。
       # devDependencies の除外ルールは .github/osv-scanner.toml に定義している。
+      # ファイルが無い場合は base-security 側が共通の既定設定を用意する。
       osv_scan_args: |-
         --config=./.github/osv-scanner.toml
         --recursive
